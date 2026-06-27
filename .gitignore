@@ -1,0 +1,51 @@
+# Environments & Credentials
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+pyvenv.cfg
+
+# Python Cache & Packaging
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.tox/
+.coverage
+.cache
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Node Modules & Frontend Build outputs
+node_modules/
+/dist/
+.svelte-kit/
+.next/
+.nuxt/
+out/
+.vercel
+.npm
+*.log
+
+# Databases & Vector Stores local storage
+chroma_store/
+neo4j/data/
+neo4j/logs/
+/db.sqlite3
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+*.bak
+*.swp
+*.tmp
