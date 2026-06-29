@@ -1,7 +1,7 @@
-# SabreRoute Intelligence
+# Route Intelligence
 
 1. **What it does**
-SabreRoute Intelligence is an Autonomous Travel Demand Forecasting Agent that predicts upcoming route popularity spikes. It ingests historical data from Sabre, enriches it with Google Trends and Open-Meteo weather signals, and uses a local Chronos AI model to forecast 30-day demand.
+Route Intelligence is an Autonomous Travel Demand Forecasting Agent that predicts upcoming route popularity spikes. It ingests historical data from Sabre, enriches it with Google Trends and Open-Meteo weather signals, and uses a local Chronos AI model to forecast 30-day demand.
 
 2. **Architecture**
 ```text

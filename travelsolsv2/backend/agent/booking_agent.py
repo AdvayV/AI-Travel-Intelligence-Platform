@@ -75,6 +75,61 @@ else:
     if LANGCHAIN_AVAILABLE:
         logger.warning("HUGGINGFACE_API_KEY not set. Agent will run in mock deterministic mode.")
 
+def extract_booking_params(query: str, entities: dict, passenger: str = None) -> tuple:
+    passenger_bands = {
+        "Aryan Mehta": 7,
+        "Priya Sharma": 4,
+        "Rajesh Kumar": 8,
+        "Anita Singh": 3,
+        "Vikram Nair": 9
+    }
+    
+    # 1. Parse band
+    band = None
+    band_match = re.search(r"\b[Bb]and\s*([1-9])\b", query)
+    if band_match:
+        band = int(band_match.group(1))
+    else:
+        p_name = passenger
+        if p_name and p_name.strip() in passenger_bands:
+            band = passenger_bands[p_name.strip()]
+        else:
+            for k, v in passenger_bands.items():
+                if k.lower() in query.lower():
+                    band = v
+                    break
+    if band is None:
+        band = 5  # default band
+        
+    # 2. Determine cabin class
+    dest = entities["airports"][1] if entities.get("airports") and len(entities["airports"]) > 1 else "DXB"
+    is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
+    
+    if "business" in query.lower():
+        cabin_class = "BUSINESS"
+    elif "first" in query.lower():
+        cabin_class = "FIRST"
+    elif "economy" in query.lower():
+        cabin_class = "ECONOMY"
+    elif is_long_haul and band >= 6:
+        # Long-haul and band permit business class -> Default to BUSINESS
+        cabin_class = "BUSINESS"
+    else:
+        cabin_class = "ECONOMY"
+        
+    # 3. Determine policy ID
+    if not entities.get("policies"):
+        if 6 <= band <= 8:
+            policy_id = "CP-002"
+        elif band == 9:
+            policy_id = "CP-003"
+        else:
+            policy_id = "CP-001"
+    else:
+        policy_id = entities["policies"][0]
+        
+    return band, cabin_class, policy_id
+
 def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_class: str, policy_id: str, band: int = None) -> list:
     from travel.flight_search import search_flights_api
     from graph.neo4j_client import get_active_waivers, get_corporate_policy
@@ -87,21 +142,33 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         logger.error(f"Flight search failed in evaluation: {e}")
         flights = []
 
-    # --- Surge Pricing from Route Forecast ---
+    # Calculate travel date offset from today
+    try:
+        travel_dt = datetime.strptime(travel_date, "%Y-%m-%d").date()
+        day_offset = (travel_dt - date.today()).days
+        if day_offset < 0:
+            day_offset = 0
+    except:
+        day_offset = 0
+
+    # --- Surge Pricing from Route Forecast for travel date ---
     surge_info = None
     try:
-        forecast = get_single_forecast(origin.upper(), dest.upper())
-        if forecast and forecast.get("surge_multiplier", 1.0) > 1.0:
-            surge_info = {
-                "multiplier": forecast["surge_multiplier"],
-                "score": forecast["score"],
-                "tier": forecast["tier"],
-                "trend": forecast["trend"],
-                "momentum_pct": forecast["momentum_pct"]
-            }
-            logger.info(f"Surge pricing active for {origin}-{dest}: {surge_info['multiplier']}x (score={surge_info['score']}, tier={surge_info['tier']})")
+        base_forecast = get_single_forecast(origin.upper(), dest.upper())
+        if base_forecast:
+            from scheduler import recompute_forecast_for_day
+            forecast = recompute_forecast_for_day(base_forecast, day_offset)
+            if forecast and forecast.get("surge_multiplier", 1.0) > 0.0:
+                surge_info = {
+                    "multiplier": forecast["surge_multiplier"],
+                    "score": forecast["score"],
+                    "tier": forecast["tier"],
+                    "trend": forecast["trend"],
+                    "momentum_pct": forecast["momentum_pct"]
+                }
+                logger.info(f"Recomputed surge for {origin}-{dest} on day offset {day_offset}: {surge_info['multiplier']}x (score={surge_info['score']})")
     except Exception as e:
-        logger.warning(f"Could not load surge forecast for {origin}-{dest}: {e}")
+        logger.warning(f"Could not load/recompute surge forecast for {origin}-{dest}: {e}")
         
     try:
         waivers = get_active_waivers(origin)
@@ -111,37 +178,32 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         
     has_monsoon_waiver = any(w.get("id") == "WX-2026-INDIA" for w in waivers)
     
+    # Fetch destination weather for the specific travel date using Open-Meteo
+    from weather_client import get_weather_detail
+    dest_weather_desc = "Weather information unavailable"
+    is_high_weather_risk = False
     try:
-        weather_info = get_weather_risk_tool(origin)
-    except Exception as e:
-        logger.error(f"Weather risk failed in evaluation: {e}")
-        weather_info = "LOW weather risk"
-        
-    is_high_weather_risk = "HIGH weather risk" in weather_info
-    
-    # Parse weather conditions for display
-    weather_summary = "30°C, Low Risk"
-    if weather_info:
-        risk_match = re.search(r"Risk Level:\s*([A-Za-z\s()\-]+)", weather_info)
-        temp_match = re.search(r"around\s*([0-9.]+\s*C|F)", weather_info)
-        risk_str = risk_match.group(1).split("(")[0].strip() if risk_match else None
-        # Clean risk_str if it contains "weather risk"
-        if risk_str:
-            risk_str = risk_str.replace("weather risk", "").strip().title()
-        temp_str = temp_match.group(1) if temp_match else None
-        
-        if not risk_str:
-            if "HIGH weather risk" in weather_info:
-                risk_str = "High"
-            elif "MODERATE weather risk" in weather_info:
-                risk_str = "Moderate"
-            else:
-                risk_str = "Low"
-                
-        if temp_str:
-            weather_summary = f"{temp_str}, {risk_str} Risk"
+        dest_w = get_weather_detail(dest.upper())
+        if "days" in dest_w and 0 <= day_offset < len(dest_w["days"]):
+            day_data = dest_w["days"][day_offset]
+            dest_weather_desc = f"{day_data['temp_max_c']}°C, {day_data['condition']} {day_data['emoji']}"
+            # Determine risk level based on daily appeal score
+            appeal = day_data.get("appeal", 1.0)
+            if appeal <= 0.4:
+                is_high_weather_risk = True
+            logger.info(f"Retrieved destination weather for day offset {day_offset}: {dest_weather_desc} (is_high_weather_risk={is_high_weather_risk})")
         else:
-            weather_summary = f"{risk_str} Risk"
+            temp = dest_w.get("today_temp_max_c")
+            cond = dest_w.get("today_condition")
+            emoji = dest_w.get("today_emoji", "")
+            if temp is not None:
+                dest_weather_desc = f"{temp}°C, {cond} {emoji}"
+            is_high_weather_risk = dest_w.get("overall_appeal", 1.0) <= 0.4
+    except Exception as e:
+        logger.warning(f"Could not retrieve weather details for {dest}: {e}")
+
+    weather_summary = dest_weather_desc
+
     
     try:
         policy = get_corporate_policy(policy_id) or {}
@@ -189,19 +251,34 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         violations = []
         waiver_exceptions = []
 
-        # Check passenger band restrictions (Bands 1-5 allow only Economy; 6-9 allow Economy/Business)
+        # Check passenger band and destination restrictions
         if band is not None:
+            # Bands 1-5: strictly restricted to Economy on all routes
             if 1 <= band <= 5:
                 if display_class == "Business":
                     violations.append(f"Passenger is in Band {band} and is restricted to Economy travel only")
+            # Bands 6-7: allowed Business only on transcontinental routes
+            elif 6 <= band <= 7:
+                is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
+                if display_class == "Business" and not is_long_haul:
+                    violations.append(f"Passenger is in Band {band} and is restricted to Economy on short-haul/medium-haul routes (only transcontinental routes permit Business class)")
+            # Bands 8-9: allowed Business on all routes
         
         # Check fare class compliance
-        if f_class not in allowed_fare_classes:
+        allowed_fare_classes_normalized = list(allowed_fare_classes)
+        # If Business class is allowed destination and band-wise, we ensure standard business fare classes are treated as allowed
+        if display_class == "Business":
+            is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
+            if (band >= 8) or (6 <= band <= 7 and is_long_haul):
+                # Ensure business classes are allowed
+                allowed_fare_classes_normalized.extend(["J", "C", "D"])
+                
+        if f_class not in allowed_fare_classes_normalized:
             # Waiver Exception: CP-001 monsoon provisions reduces restrictions for Y class
             if policy_id == "CP-001" and has_monsoon_waiver and f_class == "Y":
                 waiver_exceptions.append("Economy allowed under Monsoon Waiver Exception (WX-2026-INDIA)")
             else:
-                violations.append(f"Fare class '{display_class}' is restricted. Allowed class: Economy")
+                violations.append(f"Fare class '{display_class}' is restricted under policy {policy_id}.")
                 
         # Check maximum price
         if price > max_fare:
@@ -353,8 +430,9 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
     origin = entities["airports"][0] if entities["airports"] else "BOM"
     dest = entities["airports"][1] if len(entities["airports"]) > 1 else "DXB"
     date_str = parse_prompt_date(query)
-    policy_id = entities["policies"][0] if entities["policies"] else "CP-001"
-    cabin_class = "BUSINESS" if "business" in query.lower() else "ECONOMY"
+    
+    # Dynamically extract passenger band, cabin class, and policy
+    band, cabin_class, policy_id = extract_booking_params(query, entities, passenger)
     
     # If LLM is not available or LangChain is not installed, run fallback mock execution directly
     if _llm is None or not LANGCHAIN_AVAILABLE:
@@ -423,30 +501,8 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
         if "NON-COMPLIANT" in final_answer:
             compliant = False
 
-        # Determine passenger band
-        passenger_bands = {
-            "Aryan Mehta": 7,
-            "Priya Sharma": 4,
-            "Rajesh Kumar": 8,
-            "Anita Singh": 3,
-            "Vikram Nair": 9
-        }
-        band = None
-        band_match = re.search(r"\b[Bb]and\s*([1-9])\b", query)
-        if band_match:
-            band = int(band_match.group(1))
-        else:
-            p_name = passenger_name or passenger
-            if p_name and p_name.strip() in passenger_bands:
-                band = passenger_bands[p_name.strip()]
-            else:
-                for k, v in passenger_bands.items():
-                    if k.lower() in query.lower():
-                        band = v
-                        break
-            
-        if band is None:
-            band = 5  # Default band for new/unspecified users
+        # Passenger band and policy determined at start of function
+        pass
             
         flight_options = evaluate_flight_options(origin, dest, date_str, cabin_class, policy_id, band)
         if flight_options and not any(f["compliant"] for f in flight_options):
@@ -472,32 +528,8 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     dest = entities["airports"][1] if len(entities["airports"]) > 1 else "DXB"
     date_str = parse_prompt_date(query)
         
-    policy_id = entities["policies"][0] if entities["policies"] else "CP-001"
-    cabin_class = "BUSINESS" if "business" in query.lower() else "ECONOMY"
-
-    passenger_bands = {
-        "Aryan Mehta": 7,
-        "Priya Sharma": 4,
-        "Rajesh Kumar": 8,
-        "Anita Singh": 3,
-        "Vikram Nair": 9
-    }
-    band = None
-    band_match = re.search(r"\b[Bb]and\s*([1-9])\b", query)
-    if band_match:
-        band = int(band_match.group(1))
-    else:
-        p_name = passenger_name or passenger
-        if p_name and p_name.strip() in passenger_bands:
-            band = passenger_bands[p_name.strip()]
-        else:
-            for k, v in passenger_bands.items():
-                if k.lower() in query.lower():
-                    band = v
-                    break
-                    
-    if band is None:
-        band = 5  # Default band for new/unspecified users
+    # Dynamically extract passenger band, cabin class, and policy
+    band, cabin_class, policy_id = extract_booking_params(query, entities, passenger)
     
     steps = []
     

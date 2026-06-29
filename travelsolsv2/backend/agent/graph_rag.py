@@ -5,10 +5,121 @@ from vector.chroma_client import ChromaClient
 
 logger = logging.getLogger(__name__)
 
-AIRPORTS = ["BOM", "DEL", "BLR", "MAA", "HYD", "DXB", "SIN", "LHR", "JFK", "CDG", "NRT", "BKK", "KUL", "DOH", "SYD"]
+AIRPORTS = [
+    "BOM", "DEL", "BLR", "MAA", "HYD", "DXB", "SIN", "LHR", "JFK", "CDG", "NRT", "BKK", "KUL", "DOH", "SYD",
+    "FRA", "AMS", "ORD", "LAX", "DFW", "SFO", "HKG", "ICN", "FCO", "ZRH", "VIE", "MUC", "CPH", "ARN", "IST",
+    "CAI", "NBO", "JNB", "CMB", "DAC", "KTM", "PEK", "PVG", "CAN", "RGN", "SGN", "HAN", "CGK", "MNL", "KIX",
+    "NGO", "CTS", "MEL", "BNE", "AKL", "PER", "YYZ", "JED"
+]
 AIRLINES = ["AI", "EK", "QR", "SQ", "BA", "6E"]
 PASSENGERS = ["Aryan Mehta", "Priya Sharma", "Rajesh Kumar", "Anita Singh", "Vikram Nair"]
 FARE_CLASSES = ["Y", "M", "K", "Q", "J", "C", "D", "G"]
+
+CITY_TO_AIRPORT = {
+    "mumbai": "BOM", "bombay": "BOM",
+    "delhi": "DEL", "new delhi": "DEL",
+    "bangalore": "BLR", "bengaluru": "BLR",
+    "chennai": "MAA", "madras": "MAA",
+    "hyderabad": "HYD",
+    "dubai": "DXB",
+    "singapore": "SIN",
+    "london": "LHR", "heathrow": "LHR",
+    "new york": "JFK", "jfk": "JFK",
+    "paris": "CDG", "charles de gaulle": "CDG",
+    "tokyo": "NRT", "narita": "NRT",
+    "bangkok": "BKK", "suvarnabhumi": "BKK",
+    "kuala lumpur": "KUL",
+    "doha": "DOH",
+    "sydney": "SYD",
+    "frankfurt": "FRA",
+    "amsterdam": "AMS",
+    "chicago": "ORD",
+    "los angeles": "LAX",
+    "dallas": "DFW",
+    "san francisco": "SFO",
+    "hong kong": "HKG",
+    "seoul": "ICN", "incheon": "ICN",
+    "rome": "FCO",
+    "zurich": "ZRH",
+    "vienna": "VIE",
+    "munich": "MUC",
+    "copenhagen": "CPH",
+    "stockholm": "ARN",
+    "istanbul": "IST",
+    "cairo": "CAI",
+    "nairobi": "NBO",
+    "johannesburg": "JNB",
+    "colombo": "CMB",
+    "dhaka": "DAC",
+    "kathmandu": "KTM",
+    "beijing": "PEK",
+    "shanghai": "PVG",
+    "guangzhou": "CAN",
+    "yangon": "RGN",
+    "ho chi minh": "SGN", "saigon": "SGN",
+    "hanoi": "HAN",
+    "jakarta": "CGK",
+    "manila": "MNL",
+    "osaka": "KIX",
+    "nagoya": "NGO",
+    "sapporo": "CTS",
+    "melbourne": "MEL",
+    "brisbane": "BNE",
+    "auckland": "AKL",
+    "perth": "PER",
+    "toronto": "YYZ",
+    "jeddah": "JED"
+}
+
+def extract_entities_with_llm(query: str) -> dict:
+    import os
+    import json
+    from langchain_openai import ChatOpenAI
+    
+    hf_key = os.getenv("HUGGINGFACE_API_KEY")
+    if not hf_key or hf_key == "your_huggingface_api_key_here":
+        logger.info("HF API key not configured or placeholder. Skipping LLM entity extraction.")
+        return {}
+        
+    try:
+        logger.info("Calling Hugging Face LLM for semantic entity extraction...")
+        llm = ChatOpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_key,
+            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            max_tokens=150,
+            temperature=0.0,
+            timeout=8
+        )
+        
+        prompt = (
+            "You are a travel entity extractor. Extract the booking parameters from the user's natural language query.\n"
+            "Map city names and airports to their corresponding 3-letter IATA codes (e.g. London -> LHR, Mumbai -> BOM, Bangalore/Bengaluru -> BLR).\n"
+            "Return ONLY a valid JSON object. Do not include markdown formatting or explanations.\n"
+            "Format:\n"
+            "{\n"
+            "  \"origin\": \"3-letter IATA code or null\",\n"
+            "  \"destination\": \"3-letter IATA code or null\",\n"
+            "  \"passenger\": \"name or null\",\n"
+            "  \"band\": integer 1-9 or null\n"
+            "}\n\n"
+            f"Query: \"{query}\"\n"
+            "JSON:"
+        )
+        
+        res = llm.invoke(prompt)
+        clean_response = res.content.strip()
+        if clean_response.startswith("```"):
+            clean_response = clean_response.split("```")[1]
+            if clean_response.startswith("json"):
+                clean_response = clean_response[4:]
+        
+        data = json.loads(clean_response)
+        logger.info(f"LLM entity extraction successful: {data}")
+        return data
+    except Exception as e:
+        logger.warning(f"LLM entity extraction failed: {e}. Falling back to local parser.")
+        return {}
 
 def detect_entities(query: str) -> dict:
     query_upper = query.upper()
@@ -21,11 +132,32 @@ def detect_entities(query: str) -> dict:
         "waivers": []
     }
     
-    # 1. Detect Airports (3 letter uppercase codes from query, filter with allowed list)
+    # 1. Try LLM semantic extraction first
+    llm_entities = extract_entities_with_llm(query)
+    if llm_entities:
+        org = llm_entities.get("origin")
+        dst = llm_entities.get("destination")
+        psg = llm_entities.get("passenger")
+        if org and org.upper() in AIRPORTS:
+            entities["airports"].append(org.upper())
+        if dst and dst.upper() in AIRPORTS:
+            if dst.upper() not in entities["airports"]:
+                entities["airports"].append(dst.upper())
+        if psg:
+            entities["passengers"].append(psg)
+            
+    # 2a. Detect Airports (3 letter uppercase codes from query, filter with allowed list)
     found_airports = re.findall(r"\b[A-Z]{3}\b", query_upper)
     for code in found_airports:
-        if code in AIRPORTS and code not in entities["airports"]:
+        if code not in entities["airports"] and code in AIRPORTS:
             entities["airports"].append(code)
+            
+    # 2b. Detect Airport by City Name / Alternative Name
+    query_lower = query.lower()
+    for city, code in CITY_TO_AIRPORT.items():
+        if re.search(rf"\b{re.escape(city)}\b", query_lower):
+            if code not in entities["airports"]:
+                entities["airports"].append(code)
             
     # 2. Detect Corporate Policy IDs (CP-001, CP-002, CP-003)
     found_policies = re.findall(r"\bCP-\d{3}\b", query_upper)

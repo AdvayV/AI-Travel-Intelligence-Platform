@@ -142,6 +142,30 @@ npm run dev
 
 ---
 
+## Dynamic Cabin & Weather-Resilient Booking Rules (v2)
+
+TravelRoute v2 features smart compliance rules and weather integration driven by the booking query details:
+
+* **Band- and Route-based Cabin Allowance**:
+  * **Bands 1-5**: Strictly restricted to Economy Class on all flight routes.
+  * **Bands 6-7**: Automatically permitted to fly Business Class on transcontinental long-haul sectors (e.g. `LHR`, `JFK`, `SYD`, `CDG`, `NRT`), but restricted to Economy Class on short/medium-haul routes (e.g. `DXB`, `SIN`, `BKK`).
+  * **Bands 8-9**: Permitted to fly Business Class on any route.
+* **Smart Policy Mapping**: If no policy ID is provided in the query, the engine dynamically maps the passenger's band level to the corresponding policy (`CP-001` for bands 1-5, `CP-002` for bands 6-8, `CP-003` for band 9).
+* **Live Travel Date Weather**: Integrates daily weather forecasts from Open-Meteo for the specific travel date offset, updating the surge multiplier for the date's forecast and displaying the weather directly alongside flight fares.
+* **LLM-Based Entity Parsing & City Resolution**: Uses the Hugging Face AI API (with local regex fallback) to semantically extract passenger names, dates, and bands, and automatically map full city names (e.g. "Bangalore" or "London") to IATA codes (e.g. `BLR` or `LHR`).
+* **Collapsible Compliance Checklist**: Displays clear checklist audit logs (with green `✓` or red `✗` indicators) inside a collapsible "Booking Proposal" panel to maximize viewport workspace.
+* **Fully Offline Flight Selection**: Completely deprecated and removed the third-party Kiwi API integration, routing all flight bookings through deterministic local simulated endpoints.
+
+### Corporate Passenger Band Segmentation
+
+| Corporate Grade | Band Range | Default Policy | Cabin Class Rules | Seeded Mock Employees |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard Grade** | Bands 1-5 | `CP-001` (Standard Policy) | Economy only on all routes | Anita Singh (Band 3), Priya Sharma (Band 4) |
+| **Senior Management** | Bands 6-8 | `CP-002` (Senior Mgmt) | Business allowed *only* on long-haul/transcontinental routes (e.g., LHR, JFK); restricted to Economy on short-haul routes. | Aryan Mehta (Band 7), Rajesh Kumar (Band 8) |
+| **Executive Grade** | Band 9 | `CP-003` (Executive Policy) | Business/First allowed on all routes | Vikram Nair (Band 9) |
+
+---
+
 ## Offline & Connection Resilience (Auto-Fallback Mode)
 
 TravelRoute v2 features an advanced, bulletproof fallback system designed to ensure the application works even when third-party cloud services or API connections are down:

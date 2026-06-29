@@ -358,9 +358,8 @@ export default function PolicyGraphPage() {
   const handleNodeMouseDown = (e, id) => {
     e.stopPropagation();
     setDragId(id);
-    const node = simNodes.find(n => n.id === id);
-    setSelected(node || null);
   };
+
 
   // Short name formatter for rendering inside circles
   const getShortLabel = (node) => {
