@@ -3,7 +3,7 @@ echo ============================================
 echo   SabreRoute Intelligence - Auto Launcher
 echo ============================================
 
-cd /d "C:\Advay study\VIT\Coforge Internship Project\sabreroute"
+cd /d "%~dp0"
 
 REM Check if venv exists, create if not
 IF NOT EXIST "venv\Scripts\python.exe" (

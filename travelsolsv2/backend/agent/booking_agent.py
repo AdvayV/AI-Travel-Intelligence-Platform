@@ -544,10 +544,10 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     })
     
     # Step 2: get_weather_risk
-    weather_out = get_weather_risk_tool(origin)
+    weather_out = get_weather_risk_tool(dest)
     steps.append({
         "tool_name": "get_weather_risk",
-        "tool_input": origin,
+        "tool_input": dest,
         "tool_output": weather_out
     })
     
@@ -603,7 +603,7 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     final_ans = (
         f"I have successfully analyzed the travel booking parameters for passenger {passenger} from {origin} to {dest} on {date_str}.\n\n"
         f"1. **Waiver Check**: Checked active waivers for {origin}.{w_details}\n\n"
-        f"2. **Weather Risk**: Checked departure weather for {origin}. Stability score computed.\n\n"
+        f"2. **Weather Risk**: Checked destination weather for {dest}. Stability score computed.\n\n"
         f"3. **Flight Options**: Checked available flight options on {date_str} and retrieved {len(flight_options)} possible routes (including weather-resilient alternatives).{surge_summary}\n\n"
         f"4. **Compliance Status**: Evaluated flight details against corporate policy {policy_id}.\n\n"
         f"Please select your preferred itinerary option from the interactive Selector Card below to complete the booking registry."

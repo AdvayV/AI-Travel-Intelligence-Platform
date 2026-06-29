@@ -3,7 +3,7 @@ echo ============================================
 echo   SabreRoute Intelligence - Frontend
 echo ============================================
 
-cd /d "C:\Advay study\VIT\Coforge Internship Project\sabreroute\frontend"
+cd /d "%~dp0frontend"
 
 echo [1/2] Installing npm packages...
 call npm install

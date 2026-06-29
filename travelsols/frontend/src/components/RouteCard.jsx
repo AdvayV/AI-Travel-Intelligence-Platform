@@ -14,11 +14,7 @@ function RouteCard({ route, isSelected, onClick }) {
   const isDiscount = route.surge_multiplier < 1.0;
   const tierBorder = TIER_LEFT_BORDER[route.tier] || '#1E2D4A';
 
-  const getRankColor = (current, previous) => {
-    if (current < previous) return '#4CAF50';
-    if (current > previous) return '#FF3B3B';
-    return '#6B7FA3';
-  };
+
 
   const surgeColor = route.surge_multiplier >= 2.0 ? '#FF3B3B'
                    : route.surge_multiplier >= 1.5  ? '#FF9B00'
@@ -93,15 +89,7 @@ function RouteCard({ route, isSelected, onClick }) {
         <div style={{ background: '#1E2D4A', padding: '2px 7px', borderRadius: '4px', color: surgeColor, fontWeight: 'bold' }}>
           ×{route.surge_multiplier?.toFixed(2)} surge
         </div>
-        <div style={{ background: '#1E2D4A', padding: '2px 7px', borderRadius: '4px', color: getRankColor(route.sabre_rank_2w, route.sabre_rank_8w) }}>
-          2w #{route.sabre_rank_2w}
-        </div>
-        <div style={{ background: '#1E2D4A', padding: '2px 7px', borderRadius: '4px', color: getRankColor(route.sabre_rank_8w, route.sabre_rank_12w) }}>
-          8w #{route.sabre_rank_8w}
-        </div>
-        <div style={{ background: '#1E2D4A', padding: '2px 7px', borderRadius: '4px', color: '#6B7FA3' }}>
-          12w #{route.sabre_rank_12w}
-        </div>
+
         {route.surge_capped && (
           <div style={{ background: '#FF3B3B20', border: '1px solid #FF3B3B', padding: '2px 7px', borderRadius: '4px', color: '#FF3B3B' }}>
             CAPPED

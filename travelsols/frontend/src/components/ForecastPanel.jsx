@@ -380,12 +380,6 @@ function ForecastPanel({ route }) {
       <div style={{ background: '#0D1428', border: '1px solid #1E2D4A', borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
         <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', color: 'white' }}>📊 Signal Breakdown</h3>
         <ProgressBar
-          label="Sabre GDS Momentum"
-          color="#4A9EFF"
-          percent={Math.round(((51 - (d.sabre_rank_2w || 25)) / 50) * 100)}
-          sub={`2w rank #${d.sabre_rank_2w} · 8w #${d.sabre_rank_8w} · 12w #${d.sabre_rank_12w}`}
-        />
-        <ProgressBar
           label={`Google Trends · ${trendsPct}% search interest`}
           color="#9C27B0"
           percent={trendsPct}

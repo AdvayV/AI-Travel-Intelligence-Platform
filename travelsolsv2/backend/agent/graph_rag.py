@@ -134,30 +134,136 @@ def detect_entities(query: str) -> dict:
     
     # 1. Try LLM semantic extraction first
     llm_entities = extract_entities_with_llm(query)
+    llm_origin = None
+    llm_dest = None
     if llm_entities:
-        org = llm_entities.get("origin")
-        dst = llm_entities.get("destination")
+        llm_origin = llm_entities.get("origin")
+        llm_dest = llm_entities.get("destination")
         psg = llm_entities.get("passenger")
-        if org and org.upper() in AIRPORTS:
-            entities["airports"].append(org.upper())
-        if dst and dst.upper() in AIRPORTS:
-            if dst.upper() not in entities["airports"]:
-                entities["airports"].append(dst.upper())
         if psg:
             entities["passengers"].append(psg)
             
-    # 2a. Detect Airports (3 letter uppercase codes from query, filter with allowed list)
-    found_airports = re.findall(r"\b[A-Z]{3}\b", query_upper)
-    for code in found_airports:
-        if code not in entities["airports"] and code in AIRPORTS:
-            entities["airports"].append(code)
+    # 2. Robust positional/directional local identification
+    origin_code = llm_origin.upper() if (llm_origin and llm_origin.upper() in AIRPORTS) else None
+    dest_code = llm_dest.upper() if (llm_dest and llm_dest.upper() in AIRPORTS) else None
+    
+    # If LLM didn't extract both, or to ensure robust fallback when typing, use local positional parser
+    if not (origin_code and dest_code):
+        query_lower = query.lower()
+        matches = []
+        
+        # 2a. Find city name matches (from CITY_TO_AIRPORT mapping)
+        for city, code in CITY_TO_AIRPORT.items():
+            pattern = rf"\b{re.escape(city.lower())}\b"
+            for m in re.finditer(pattern, query_lower):
+                matches.append({
+                    "code": code,
+                    "start": m.start(),
+                    "end": m.end(),
+                    "text": m.group(0)
+                })
+                
+        # 2b. Find IATA code matches (3-letter uppercase codes)
+        for code in AIRPORTS:
+            pattern = rf"\b{re.escape(code)}\b"
+            for m in re.finditer(pattern, query_upper):
+                matches.append({
+                    "code": code,
+                    "start": m.start(),
+                    "end": m.end(),
+                    "text": m.group(0)
+                })
+                
+        # Deduplicate overlapping matches (e.g. "BOM" and "mumbai" at same place, keep longer span)
+        matches.sort(key=lambda x: (x["start"], -(x["end"] - x["start"])))
+        deduped = []
+        last_end = -1
+        for m in matches:
+            if m["start"] >= last_end:
+                deduped.append(m)
+                last_end = m["end"]
+                
+        # Select first 2 unique matched airports to classify
+        unique_matches = []
+        seen_codes = set()
+        for m in deduped:
+            if m["code"] not in seen_codes:
+                unique_matches.append(m)
+                seen_codes.add(m["code"])
+                if len(unique_matches) == 2:
+                    break
+                    
+        # Define positional/directional indicator keywords
+        ORIGIN_KEYWORDS = ["from", "departing", "depart", "departs", "departure", "origin", "source", "out of", "leaving", "flying from", "start", "starting"]
+        DEST_KEYWORDS = ["to", "arriving", "arrive", "arrives", "arrival", "destination", "dest", "going to", "towards", "bound for", "flying to", "flight to"]
+        
+        def get_closest_indicator(preceding_text: str):
+            indicators = []
+            for keyword in ORIGIN_KEYWORDS:
+                for match in re.finditer(rf"\b{re.escape(keyword)}\b", preceding_text):
+                    indicators.append(("origin", match.start()))
+            for keyword in DEST_KEYWORDS:
+                for match in re.finditer(rf"\b{re.escape(keyword)}\b", preceding_text):
+                    indicators.append(("dest", match.start()))
+            if not indicators:
+                return None
+            indicators.sort(key=lambda x: x[1], reverse=True)
+            return indicators[0][0]
             
-    # 2b. Detect Airport by City Name / Alternative Name
-    query_lower = query.lower()
-    for city, code in CITY_TO_AIRPORT.items():
-        if re.search(rf"\b{re.escape(city)}\b", query_lower):
-            if code not in entities["airports"]:
-                entities["airports"].append(code)
+        local_origin = None
+        local_dest = None
+        
+        if len(unique_matches) == 2:
+            roles = []
+            for m in unique_matches:
+                preceding = query_lower[:m["start"]]
+                roles.append(get_closest_indicator(preceding))
+                
+            # Classify based on directional indicators
+            if roles[0] == "origin" and roles[1] == "dest":
+                local_origin = unique_matches[0]["code"]
+                local_dest = unique_matches[1]["code"]
+            elif roles[0] == "dest" and roles[1] == "origin":
+                local_origin = unique_matches[1]["code"]
+                local_dest = unique_matches[0]["code"]
+            elif roles[0] == "origin" and roles[1] is None:
+                local_origin = unique_matches[0]["code"]
+                local_dest = unique_matches[1]["code"]
+            elif roles[0] is None and roles[1] == "dest":
+                local_origin = unique_matches[0]["code"]
+                local_dest = unique_matches[1]["code"]
+            elif roles[0] == "dest" and roles[1] is None:
+                local_origin = unique_matches[1]["code"]
+                local_dest = unique_matches[0]["code"]
+            elif roles[0] is None and roles[1] == "origin":
+                local_origin = unique_matches[1]["code"]
+                local_dest = unique_matches[0]["code"]
+            else:
+                # Default order of appearance in query
+                local_origin = unique_matches[0]["code"]
+                local_dest = unique_matches[1]["code"]
+        elif len(unique_matches) == 1:
+            m = unique_matches[0]
+            preceding = query_lower[:m["start"]]
+            role = get_closest_indicator(preceding)
+            if role == "dest":
+                local_dest = m["code"]
+            else:
+                local_origin = m["code"]
+                
+        # Merge local extraction with LLM results
+        if not origin_code:
+            origin_code = local_origin
+        if not dest_code:
+            dest_code = local_dest
+            
+    # Set final airports array: origin first, then destination
+    if origin_code:
+        entities["airports"].append(origin_code)
+    if dest_code and dest_code not in entities["airports"]:
+        if not origin_code:
+            entities["airports"].insert(0, "BOM")  # Pad default origin so dest is at index 1
+        entities["airports"].append(dest_code)
             
     # 2. Detect Corporate Policy IDs (CP-001, CP-002, CP-003)
     found_policies = re.findall(r"\bCP-\d{3}\b", query_upper)
