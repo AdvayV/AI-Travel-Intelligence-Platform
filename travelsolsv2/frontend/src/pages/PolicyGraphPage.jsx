@@ -516,9 +516,17 @@ export default function PolicyGraphPage() {
             
             {/* Model Generated Summary Answer */}
             {queryAnswer && (
-              <div className="border-b border-[#1E293B] pb-2">
-                <span className="text-[9px] uppercase font-bold text-[#38BDF8] tracking-wider block mb-1">🤖 Translated AI Summary Answer</span>
-                <p className="text-white leading-relaxed font-sans text-xs">{queryAnswer}</p>
+              <div className="border-b border-[#1E293B] pb-3 mb-2">
+                <span className="text-[10px] uppercase font-bold text-[#38BDF8] tracking-wider flex items-center gap-2 mb-2">
+                  <span className="text-base">🤖</span> AI Summary Analysis
+                </span>
+                <div className="text-white leading-relaxed font-sans text-sm bg-slate-800/50 p-3 rounded border border-slate-700/50 shadow-inner">
+                  {queryAnswer.split('\n').map((line, idx) => (
+                    <div key={idx} className={line.trim().startsWith('-') || line.trim().startsWith('*') ? 'ml-4 mb-1 text-slate-300' : 'mb-2 text-slate-200'}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

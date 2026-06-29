@@ -443,13 +443,16 @@ def api_run_nl_query(body: NLQueryRequest):
             f"- Relationships:\n"
             f"  (:Airport)-[:ROUTE {{airlines, distance_km}}]->(:Airport)\n"
             f"  (:Passenger)-[:HAS_POLICY]->(:CorporatePolicy)\n"
+            f"  (:Airport)-[:HAS_WAIVER]->(:Waiver)\n"
             f"  (:PolicyDocument)-[:HAS_SECTION]->(:PolicySection)\n"
             f"  (:PolicyDocument)-[:CONTAINS_RULE]->(:PolicyRule)\n"
             f"  (:PolicyRule)-[:GOVERNS_POLICY]->(:CorporatePolicy)\n"
             f"  (:PolicyRule)-[:PERMITS_FARE_CLASS]->(:FareClass)\n"
             f"  (:PolicyRule)-[:PREFERRED_AIRLINE]->(:Airline)\n"
             f"  (:EmployeeTier)-[:GOVERNED_BY]->(:PolicyRule)\n\n"
-            f"Return ONLY the raw Cypher query code. Do not include markdown code block syntax (like ```cypher or ```), explanations, or extra text."
+            f"Guidelines:\n"
+            f"- Use case-insensitive matching where appropriate (e.g. `toLower(p.name) CONTAINS toLower('...')`).\n"
+            f"- Return ONLY the raw Cypher query code. Do not include markdown code block syntax (like ```cypher or ```), explanations, or extra text."
         )
         
         if use_gemini:
@@ -500,6 +503,10 @@ def api_run_nl_query(body: NLQueryRequest):
             f"Question: \"{body.question}\"\n"
             f"Cypher Query Used: \"{cypher_query}\"\n"
             f"Database Results:\n{json.dumps(results[:15], indent=2)}\n\n"
+            f"Instructions:\n"
+            f"1. Give a direct answer to the user's question.\n"
+            f"2. Format your answer as a short paragraph followed by a clear bulleted list if there are multiple items.\n"
+            f"3. Do NOT output raw JSON or raw Cypher queries.\n"
             f"Answer:"
         )
         
