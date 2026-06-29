@@ -57,7 +57,7 @@ This application runs entirely on zero-cost infrastructure and local resources:
 | **Open-Meteo API** | Weather forecasting | Unlimited queries | Free | Local (No key) |
 
 > [!NOTE]
-> **Chroma Embedding Model Notice**: On first launch, the local SentenceTransformers embedding model (`all-MiniLM-L6-v2`) will automatically download from Hugging Face. The model is extremely compact (~22MB) and runs entirely on the CPU. Please allow 30 seconds for the model to download and initialize on the first request.
+> **Chroma Embedding Model Notice**: On first launch, the local SentenceTransformers embedding model (`all-MiniLM-L6-v2`) will automatically download from Hugging Face. The model is extremely compact (~22MB) and runs entirely on the CPU. Please allow 35 seconds for the model to download and initialize on the first request.
 
 ---
 
