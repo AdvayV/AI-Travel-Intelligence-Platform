@@ -104,16 +104,16 @@ def export_all_routes_to_csv(routes_dict: Dict, filepath: str = 'all_routes_fore
             (today - timedelta(weeks=2)).strftime('%Y-%m-%d'),
         ]
         
-        # Sabre rank normalization to 0-1
-        rank_2w = route_data.get('sabre_rank_2w', 25)
-        rank_8w = route_data.get('sabre_rank_8w', 25)
-        rank_12w = route_data.get('sabre_rank_12w', 25)
+        # GDS rank normalization to 0-1
+        rank_2w = route_data.get('gds_rank_2w', 25)
+        rank_8w = route_data.get('gds_rank_8w', 25)
+        rank_12w = route_data.get('gds_rank_12w', 25)
         
-        sabre_2w_norm = (51 - rank_2w) / 50.0
-        sabre_8w_norm = (51 - rank_8w) / 50.0
-        sabre_12w_norm = (51 - rank_12w) / 50.0
+        gds_2w_norm = (51 - rank_2w) / 50.0
+        gds_8w_norm = (51 - rank_8w) / 50.0
+        gds_12w_norm = (51 - rank_12w) / 50.0
         
-        historical_norms = [sabre_12w_norm, sabre_8w_norm, sabre_2w_norm]
+        historical_norms = [gds_12w_norm, gds_8w_norm, gds_2w_norm]
         
         for i, date in enumerate(historical_dates):
             all_rows.append({
@@ -137,7 +137,7 @@ def export_all_routes_to_csv(routes_dict: Dict, filepath: str = 'all_routes_fore
             'route': f'{origin}->{dest}',
             'origin': origin,
             'destination': dest,
-            'demand_score': sabre_2w_norm,
+            'demand_score': gds_2w_norm,
             'weather_score': route_data.get('weather_score', 0.7),
             'trend_signal': route_data.get('trend_score', 0),
             'type': 'Boundary',

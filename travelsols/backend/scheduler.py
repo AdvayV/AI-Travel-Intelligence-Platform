@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
-from sabre_client import get_top_destinations
+from gds_client import get_top_destinations
 from chronos_engine import forecast_route_demand
 from weather_client import get_weather_score
 from trends_client import get_trend_scores
@@ -58,8 +58,8 @@ def run_pipeline():
     processed_count = 0
 
     for origin in origins:
-        sabre_data = get_top_destinations(origin)
-        snapshots = sabre_data.get("snapshots", {})
+        gds_data = get_top_destinations(origin)
+        snapshots = gds_data.get("snapshots", {})
 
         # Collect all destinations for this origin
         all_dests = set()
@@ -89,7 +89,7 @@ def run_pipeline():
 
             # ── v2 full pricing pipeline ──────────────────────────────────
             pricing = compute_surge_pricing_v2(
-                sabre_momentum=history["2w"],
+                gds_momentum=history["2w"],
                 trend_score=t_score,
                 weather_score=w_score,
                 chronos_momentum_pct=chronos_result["momentum_pct"],
@@ -109,12 +109,12 @@ def run_pipeline():
             # Human-readable signal explanation
             tier        = pricing["tier"]
             trend_word  = "present" if t_score > 0 else "absent"
-            sabre_diff  = (history["12w"] - history["2w"])
-            sabre_dir   = "up" if sabre_diff < 0 else "down"
-            gds_momentum = abs(int(sabre_diff * 100))
+            gds_diff  = (history["12w"] - history["2w"])
+            gds_dir   = "up" if gds_diff < 0 else "down"
+            gds_momentum = abs(int(gds_diff * 100))
 
             signal_explanation = (
-                f"[v2] Sabre GDS demand {sabre_dir} {gds_momentum}% over 12 weeks. "
+                f"[v2] GDS GDS demand {gds_dir} {gds_momentum}% over 12 weeks. "
                 f"Google Trends signal {trend_word}. "
                 f"Weather at {dest}: {pricing['weather_label']} "
                 f"(score {round(w_score, 2)}, ×{pricing['weather_multiplier']}). "
@@ -133,7 +133,7 @@ def run_pipeline():
                 "dest_city_name":   dest_name,
 
                 # Raw parameters for recomputation
-                "raw_sabre_momentum": history["2w"],
+                "raw_gds_momentum": history["2w"],
                 "raw_trend_score": t_score,
                 "raw_chronos_momentum_pct": chronos_result["momentum_pct"],
                 "raw_weather_score": w_score,
@@ -167,10 +167,10 @@ def run_pipeline():
                 "surge_capped":     pricing.get("capped", False),
                 "surge_version":    "v2",
 
-                # Sabre rank proxies
-                "sabre_rank_2w":    int(51 - history["2w"]  * 50) if history["2w"]  > 0 else 50,
-                "sabre_rank_8w":    int(51 - history["8w"]  * 50) if history["8w"]  > 0 else 50,
-                "sabre_rank_12w":   int(51 - history["12w"] * 50) if history["12w"] > 0 else 50,
+                # GDS rank proxies
+                "gds_rank_2w":    int(51 - history["2w"]  * 50) if history["2w"]  > 0 else 50,
+                "gds_rank_8w":    int(51 - history["8w"]  * 50) if history["8w"]  > 0 else 50,
+                "gds_rank_12w":   int(51 - history["12w"] * 50) if history["12w"] > 0 else 50,
 
                 # Pricing
                 "base_price":       round(base_price, 2),
@@ -218,7 +218,7 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
     dest = base_forecast["destination"]
     
     # 1. Retrieve raw signals
-    sabre_momentum = base_forecast.get("raw_sabre_momentum", 0.5)
+    gds_momentum = base_forecast.get("raw_gds_momentum", 0.5)
     trend_score = base_forecast.get("raw_trend_score", 0.0)
     chronos_momentum_pct = base_forecast.get("raw_chronos_momentum_pct", 0.0)
     
@@ -243,7 +243,7 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
             
     # 4. Recompute surge pricing
     pricing = compute_surge_pricing_v2(
-        sabre_momentum=sabre_momentum,
+        gds_momentum=gds_momentum,
         trend_score=trend_score,
         weather_score=w_score,
         chronos_momentum_pct=chronos_momentum_pct,
@@ -258,12 +258,12 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
     tier = pricing["tier"]
     trend_word = "present" if trend_score > 0 else "absent"
     
-    # Sabre ranks
-    sabre_rank_2w = base_forecast.get("sabre_rank_2w", 50)
-    sabre_rank_12w = base_forecast.get("sabre_rank_12w", 50)
-    sabre_diff = (51 - sabre_rank_12w) / 50 - (51 - sabre_rank_2w) / 50
-    sabre_dir = "up" if sabre_diff < 0 else "down"
-    gds_momentum = abs(int(sabre_diff * 100))
+    # GDS ranks
+    gds_rank_2w = base_forecast.get("gds_rank_2w", 50)
+    gds_rank_12w = base_forecast.get("gds_rank_12w", 50)
+    gds_diff = (51 - gds_rank_12w) / 50 - (51 - gds_rank_2w) / 50
+    gds_dir = "up" if gds_diff < 0 else "down"
+    gds_momentum = abs(int(gds_diff * 100))
     
     # Chronos details
     chronos_trend = base_forecast.get("trend", "stable")
@@ -273,7 +273,7 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
         date_label = f" on {day_weather['date']}"
         
     signal_explanation = (
-        f"[v2] Sabre GDS demand {sabre_dir} {gds_momentum}% over 12 weeks. "
+        f"[v2] GDS GDS demand {gds_dir} {gds_momentum}% over 12 weeks. "
         f"Google Trends signal {trend_word}. "
         f"Weather at {dest}{date_label}: {pricing['weather_label']} "
         f"(score {round(w_score, 2)}, ×{pricing['weather_multiplier']}). "

@@ -10,7 +10,7 @@ async def lifespan(app: FastAPI):
     yield
     stop_scheduler()
 
-app = FastAPI(title="SabreRoute Intelligence v2", lifespan=lifespan)
+app = FastAPI(title="TravelRoute Intelligence v2", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -105,9 +105,9 @@ async def export_route_forecast(origin: str, dest: str):
         origin=origin,
         destination=dest,
         historical_data={
-            '12w': route_data.get('sabre_rank_12w', 0) / 50,
-            '8w': route_data.get('sabre_rank_8w', 0) / 50,
-            '2w': route_data.get('sabre_rank_2w', 0) / 50,
+            '12w': route_data.get('gds_rank_12w', 0) / 50,
+            '8w': route_data.get('gds_rank_8w', 0) / 50,
+            '2w': route_data.get('gds_rank_2w', 0) / 50,
         },
         forecast_data=route_data.get('weekly_forecast', [0.7, 0.7, 0.7, 0.7]),
         weather_scores={

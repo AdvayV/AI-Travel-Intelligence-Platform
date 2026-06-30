@@ -260,7 +260,7 @@ function ForecastPanel({ route }) {
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6B7FA3' }}>
         <div style={{ fontSize: '56px', marginBottom: '16px' }}>✈️</div>
         <div style={{ fontSize: '17px', marginBottom: '8px', color: '#A0B0CC' }}>Select a route to view its forecast</div>
-        <div style={{ fontSize: '12px', color: '#4A6080' }}>SabreRoute Intelligence v2 · Surge Engine Active</div>
+        <div style={{ fontSize: '12px', color: '#4A6080' }}>TravelRoute Intelligence v2 · Surge Engine Active</div>
       </div>
     );
   }
@@ -430,9 +430,9 @@ function ForecastPanel({ route }) {
         ) : (
           <DemandChart
             historical={[
-              (51 - (d.sabre_rank_12w || 25)) / 50,
-              (51 - (d.sabre_rank_8w  || 25)) / 50,
-              (51 - (d.sabre_rank_2w  || 25)) / 50,
+              (51 - (d.gds_rank_12w || 25)) / 50,
+              (51 - (d.gds_rank_8w  || 25)) / 50,
+              (51 - (d.gds_rank_2w  || 25)) / 50,
             ]}
             forecast={d.weekly_forecast}
           />

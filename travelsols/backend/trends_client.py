@@ -1,11 +1,11 @@
 """
-trends_client.py — Google Trends integration for SabreRoute Intelligence v2
+trends_client.py — Google Trends integration for TravelRoute Intelligence v2
 ===========================================================================
 Uses pytrends with:
   • Per-destination batching (1 keyword at a time) to avoid quota limits
   • Exponential back-off on 429 / connection errors
   • A realistic, route-weighted fallback seeded from the destination's mock
-    Sabre popularity so it never returns a flat 0 for all routes.
+    GDS popularity so it never returns a flat 0 for all routes.
 
 The score returned is in [0.0, 1.0] representing normalised consumer interest.
 """

@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   SabreRoute Intelligence - Auto Launcher
+echo   TravelRoute Intelligence - Auto Launcher
 echo ============================================
 
 cd /d "%~dp0"

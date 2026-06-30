@@ -1,5 +1,5 @@
 import logging
-from mock_sabre_data import get_mock_snapshots
+from mock_gds_data import get_mock_snapshots
 
 logger = logging.getLogger(__name__)
 

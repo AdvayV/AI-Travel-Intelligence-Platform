@@ -1,5 +1,5 @@
 """
-SabreRoute Intelligence v2 — Surge Pricing Engine
+TravelRoute Intelligence v2 — Surge Pricing Engine
 ===================================================
 Replaces the legacy linear additive scoring with a multiplicative,
 weather-driven, temporally-decayed model.
@@ -145,14 +145,14 @@ def get_alternate_route_adjustment(
 # ---------------------------------------------------------------------------
 
 # Weights must sum to 1.0
-_W_SABRE    = 0.40   # GDS booking momentum (most reliable real-world signal)
+_W_GDS    = 0.40   # GDS booking momentum (most reliable real-world signal)
 _W_CHRONOS  = 0.25   # AI time-series forecast momentum
 _W_WEATHER  = 0.20   # Weather appeal (MULTIPLICATIVE after scoring)
 _W_TRENDS   = 0.15   # Google Trends consumer intent
 
 
 def compute_opportunity_score_v2(
-    sabre_momentum: float,
+    gds_momentum: float,
     trend_score: float,
     weather_score: float,
     chronos_momentum_pct: float,
@@ -163,7 +163,7 @@ def compute_opportunity_score_v2(
 
     Parameters
     ----------
-    sabre_momentum      : float  GDS demand signal in [0, 1]
+    gds_momentum      : float  GDS demand signal in [0, 1]
     trend_score         : float  Google Trends signal in [0, 1]
     weather_score       : float  Open-Meteo appeal score in [0, 1]
     chronos_momentum_pct: float  Chronos forecast momentum in %  (-∞, +∞), normalised internally
@@ -180,7 +180,7 @@ def compute_opportunity_score_v2(
     chronos_0_1 = (chronos_norm + 1.0) / 2.0
 
     base = (
-        sabre_momentum  * _W_SABRE   +
+        gds_momentum  * _W_GDS   +
         chronos_0_1     * _W_CHRONOS +
         trend_score     * _W_TRENDS
     )
@@ -223,14 +223,14 @@ def compute_opportunity_score_v2(
 
 # Keep legacy alias for any code still calling the old function name
 def compute_opportunity_score(
-    sabre_momentum: float,
+    gds_momentum: float,
     trend_score: float,
     weather_score: float,
     chronos_momentum_pct: float,
 ) -> dict:
     """Legacy wrapper — delegates to v2 with forecast_day=0."""
     result = compute_opportunity_score_v2(
-        sabre_momentum=sabre_momentum,
+        gds_momentum=gds_momentum,
         trend_score=trend_score,
         weather_score=weather_score,
         chronos_momentum_pct=chronos_momentum_pct,
@@ -313,7 +313,7 @@ def compute_surge_multiplier_v2(
 # ---------------------------------------------------------------------------
 
 def compute_surge_pricing_v2(
-    sabre_momentum: float,
+    gds_momentum: float,
     trend_score: float,
     weather_score: float,
     chronos_momentum_pct: float,
@@ -333,7 +333,7 @@ def compute_surge_pricing_v2(
 
     # Opportunity score
     score_data = compute_opportunity_score_v2(
-        sabre_momentum=sabre_momentum,
+        gds_momentum=gds_momentum,
         trend_score=trend_score,
         weather_score=weather_score,
         chronos_momentum_pct=chronos_momentum_pct,

@@ -12,7 +12,7 @@ This repository hosts two core products:
 
 ### v1: Demand Forecasting Pipeline
 ```text
-[Sabre API] ----> sabre_client.py ---> (mock fallback data)
+[GDS API] ----> gds_client.py ---> (mock fallback data)
                                            |
 [Google Trends] -> trends_client.py -------+----> chronos_engine.py
                                            |             |
