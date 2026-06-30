@@ -148,7 +148,7 @@ def export_all_routes_to_csv(routes_dict: Dict, filepath: str = 'all_routes_fore
         })
         
         # Forecast
-        weekly_forecast = route_data.get('weekly_forecast', [0.7, 0.7, 0.7, 0.7])
+        weekly_forecast = route_data.get('weekly_forecast', [0.7, 0.7])
         for i in range(len(weekly_forecast)):
             decay = (1.0 - i * 0.1)
             all_rows.append({

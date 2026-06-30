@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import SignalBadge from './SignalBadge';
-import DemandChart from './DemandChart';
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -54,7 +53,7 @@ function SurgeRow({ label, value, color }) {
 
 /* ─── Interactive Calendar Component ─────────────────────────────────────── */
 
-function InteractiveCalendar({ weather, selectedOffset, onSelect }) {
+function InteractiveCalendar({ weather, selectedOffset, onSelect, optimalOffset }) {
   if (!weather || !weather.days || weather.days.length === 0) {
     return <div style={{ color: '#6B7FA3', fontSize: '12px' }}>Loading calendar data...</div>;
   }
@@ -156,6 +155,7 @@ function InteractiveCalendar({ weather, selectedOffset, onSelect }) {
 
           const { dayData, offset } = cell;
           const isSelected = offset === selectedOffset;
+          const isOptimal = offset === optimalOffset;
           const dateObj = new Date(dayData.date + 'T00:00:00');
           const dayNum = dateObj.getDate();
           
@@ -171,8 +171,29 @@ function InteractiveCalendar({ weather, selectedOffset, onSelect }) {
             <div
               key={cell.key}
               onClick={() => onSelect(offset)}
-              className={`calendar-card ${isSelected ? 'selected' : ''}`}
+              className={`calendar-card ${isSelected ? 'selected' : ''} ${isOptimal ? 'optimal' : ''}`}
             >
+              {isOptimal && (
+                <div style={{
+                  position: 'absolute',
+                  top: '-6px',
+                  right: '-6px',
+                  background: '#EAB308',
+                  color: '#0D1428',
+                  borderRadius: '50%',
+                  width: '14px',
+                  height: '14px',
+                  fontSize: '9px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                  zIndex: 2
+                }} title="Optimal Travel Date (Best Price & Weather)">
+                  ★
+                </div>
+              )}
               {/* Date & Appeal Indicator */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                 <span style={{ fontSize: '11px', fontWeight: 'bold', color: isSelected ? 'white' : '#A0B0CC' }}>
@@ -214,11 +235,71 @@ function ForecastPanel({ route }) {
   const [loadingRoute, setLoadingRoute]   = useState(false);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [selectedDayOffset, setSelectedDayOffset] = useState(0);
+  const [advisorAnswer, setAdvisorAnswer] = useState('');
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorQuestion, setAdvisorQuestion] = useState('');
 
-  // Reset selected offset when route changes
+  // Reset selected offset and advisor states when route changes
   useEffect(() => {
     setSelectedDayOffset(0);
+    setAdvisorAnswer('');
+    setAdvisorLoading(false);
   }, [route]);
+
+  const handleAskAdvisor = async (e) => {
+    if (e) e.preventDefault();
+    if (!advisorQuestion.trim() || !route) return;
+
+    const queryText = advisorQuestion;
+    setAdvisorQuestion('');
+    setAdvisorLoading(true);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+    
+    try {
+      const res = await fetch(`/api/advisor/${route.origin}/${route.destination}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: queryText }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const data = await res.json();
+      setAdvisorAnswer(data.answer || '');
+    } catch (e) {
+      console.error(e);
+      setAdvisorAnswer('Failed to get a response from Qwen3. Please try another question.');
+    } finally {
+      setAdvisorLoading(false);
+    }
+  };
+
+  const askPredefinedQuestion = async (questionText) => {
+    if (!route) return;
+    setAdvisorLoading(true);
+    setAdvisorAnswer('');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+    try {
+      const res = await fetch(`/api/advisor/${route.origin}/${route.destination}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: questionText }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const data = await res.json();
+      setAdvisorAnswer(data.answer || '');
+    } catch (e) {
+      console.error(e);
+      setAdvisorAnswer('Failed to get a response from Qwen3. Please try again.');
+    } finally {
+      setAdvisorLoading(false);
+    }
+  };
 
   // Fetch dynamic route detail on route or selected date offset change
   useEffect(() => {
@@ -326,11 +407,59 @@ function ForecastPanel({ route }) {
         </div>
       ) : weather ? (
         <>
+          {/* Optimal Travel Date Alert Box */}
+          {d.optimal_date && (
+            <div style={{
+              background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.08), rgba(59, 130, 246, 0.08))',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+              borderRadius: '12px',
+              padding: '12px 16px',
+              marginBottom: '16px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+            }}>
+              <div style={{ fontSize: '13px', color: '#E0E7FF', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '18px' }}>💡</span>
+                <span>
+                  <span style={{ color: '#EAB308', fontWeight: 'bold' }}>Recommended Optimal Travel Date:</span>{' '}
+                  <b style={{ color: 'white' }}>
+                    {new Date(d.optimal_date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' })}
+                  </b>{' '}
+                  ({d.optimal_weather_emoji} {d.optimal_weather_condition}, ${d.optimal_price?.toFixed(0)}) offers the absolute best balance of weather comfort & lowest price!
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedDayOffset(d.optimal_day_offset)}
+                style={{
+                  background: '#EAB308',
+                  color: '#0D1428',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  boxShadow: '0 2px 4px rgba(234, 179, 8, 0.2)'
+                }}
+                onMouseOver={(e) => { e.target.style.opacity = '0.88'; e.target.style.transform = 'scale(1.03)'; }}
+                onMouseOut={(e) => { e.target.style.opacity = '1'; e.target.style.transform = 'scale(1)'; }}
+              >
+                Select Date
+              </button>
+            </div>
+          )}
+
           {/* Calendar Widget */}
           <InteractiveCalendar
             weather={weather}
             selectedOffset={selectedDayOffset}
             onSelect={setSelectedDayOffset}
+            optimalOffset={d.optimal_day_offset}
           />
           
           {/* Selected Day Weather details banner */}
@@ -392,10 +521,10 @@ function ForecastPanel({ route }) {
           sub={`Multiplier ×${d.weather_multiplier} · Decay factor ${d.temporal_decay}`}
         />
         <ProgressBar
-          label="Chronos AI Confidence"
-          color="#FF9B00"
-          percent={Math.min(100, Math.max(0, 50 + (d.momentum_pct || 0)))}
-          sub={`Trend: ${d.trend} · Momentum ${d.momentum_pct > 0 ? '+' : ''}${d.momentum_pct}%`}
+          label={`Demand Score · ${Math.round(d.raw_base || 0)}%`}
+          color="#3B82F6"
+          percent={Math.round(d.raw_base || 0)}
+          sub="Calculated from live Google Trends search interest"
         />
       </div>
 
@@ -422,25 +551,180 @@ function ForecastPanel({ route }) {
         )}
       </div>
 
-      {/* ── Demand forecast chart ── */}
-      <div style={{ background: '#0D1428', border: '1px solid #1E2D4A', borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
-        <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', color: 'white' }}>📈 Demand Forecast (Chronos · 4-Week)</h3>
-        {loadingRoute ? (
-          <div style={{ height: '160px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6B7FA3' }}>Loading chart…</div>
-        ) : (
-          <DemandChart
-            historical={[
-              (51 - (d.gds_rank_12w || 25)) / 50,
-              (51 - (d.gds_rank_8w  || 25)) / 50,
-              (51 - (d.gds_rank_2w  || 25)) / 50,
-            ]}
-            forecast={d.weekly_forecast}
-          />
-        )}
-        <div style={{ display: 'flex', gap: '18px', marginTop: '10px', fontSize: '12px', color: '#6B7FA3' }}>
-          <span>Peak: <b style={{ color: 'white' }}>{d.peak_demand}</b></span>
-          <span>Mean: <b style={{ color: 'white' }}>{d.mean_demand}</b></span>
-          <span>Trend: <b style={{ color: d.trend === 'rising' ? '#4CAF50' : '#FF9B00' }}>{d.trend}</b></span>
+      {/* ── Hugging Face AI Travel Advisor ── */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(20, 16, 50, 0.9), rgba(9, 11, 26, 0.98))',
+        border: '1px solid rgba(129, 140, 248, 0.35)',
+        borderRadius: '16px',
+        padding: '22px',
+        marginBottom: '20px',
+        boxShadow: '0 10px 40px rgba(79, 70, 229, 0.15)',
+        position: 'relative',
+        overflow: 'hidden',
+        backdropFilter: 'blur(8px)'
+      }}>
+        {/* Decorative subtle backdrop light */}
+        <div style={{
+          position: 'absolute',
+          top: '-50%',
+          left: '-50%',
+          width: '200%',
+          height: '200%',
+          background: 'radial-gradient(circle, rgba(129, 140, 248, 0.12) 0%, transparent 60%)',
+          pointerEvents: 'none',
+          zIndex: 0
+        }} />
+
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '15px', color: '#A5B4FC', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: '800', letterSpacing: '0.3px' }}>
+              🤖 AI Travel Advisor
+            </span>
+            {advisorAnswer && !advisorAnswer.includes('Hugging Face API Key is not configured') && (
+              <span style={{
+                fontSize: '9.5px',
+                background: 'linear-gradient(90deg, #4F46E5, #7C3AED)',
+                color: '#E0E7FF',
+                padding: '3px 10px',
+                borderRadius: '12px',
+                fontWeight: 'bold',
+                letterSpacing: '0.7px',
+                boxShadow: '0 2px 8px rgba(79, 70, 229, 0.4)'
+              }}>
+                HF HUB LIVE
+              </span>
+            )}
+          </h3>
+          
+          {advisorLoading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: '12px' }}>
+              <div style={{
+                width: '28px',
+                height: '28px',
+                border: '3px solid rgba(129, 140, 248, 0.15)',
+                borderTop: '3px solid #818CF8',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+                boxShadow: '0 0 16px rgba(129, 140, 248, 0.3)'
+              }} />
+              <div style={{ color: '#C7D2FE', fontSize: '12.5px', fontWeight: '600', animation: 'pulse 1.5s ease-in-out infinite', letterSpacing: '0.2px' }}>
+                Consulting Qwen3 travel pricing analyst…
+              </div>
+            </div>
+          ) : !advisorAnswer ? (
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#94A3B8', lineHeight: '1.65' }}>
+                Need expert routing advice? Let Qwen3 analyze weather comfort, Google Trends search interest, and alternate routes to summarize this opportunity.
+              </p>
+              <button
+                type="button"
+                onClick={() => askPredefinedQuestion('Summarize this route opportunity in 2 sentences for a travel agent.')}
+                style={{
+                  background: 'linear-gradient(135deg, #4F46E5, #7C3AED)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '10px',
+                  padding: '10px 24px',
+                  fontSize: '13px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  boxShadow: '0 4px 16px rgba(79, 70, 229, 0.4)'
+                }}
+                onMouseOver={(e) => { e.target.style.opacity = '0.9'; e.target.style.transform = 'scale(1.03)'; }}
+                onMouseOut={(e) => { e.target.style.opacity = '1'; e.target.style.transform = 'scale(1)'; }}
+              >
+                🔮 Generate AI Analysis
+              </button>
+            </div>
+          ) : (
+            <>
+              <p style={{
+                margin: '0 0 16px 0',
+                fontSize: '14px',
+                fontFamily: "'Outfit', 'Inter', system-ui, sans-serif",
+                color: '#E2E8F0',
+                lineHeight: '1.7',
+                background: 'rgba(255,255,255,0.015)',
+                borderLeft: '3px solid #818CF8',
+                padding: '8px 14px',
+                borderRadius: '0 8px 8px 0',
+                letterSpacing: '0.1px'
+              }}>
+                {advisorAnswer.replace(/\*\*/g, '').replace(/\*/g, '')}
+              </p>
+              
+              {/* Predefined quick-query chips */}
+              {!advisorAnswer.includes('Hugging Face API Key is not configured') && (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                  {['Why this price?', 'Weather status?', 'Best travel day?'].map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => askPredefinedQuestion(q)}
+                      style={{
+                        background: 'rgba(79, 70, 229, 0.18)',
+                        border: '1px solid rgba(129, 140, 248, 0.3)',
+                        color: '#E0E7FF',
+                        borderRadius: '14px',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      className="quick-chip"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+              
+              <form onSubmit={handleAskAdvisor} style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="Ask advisor a custom question..."
+                  value={advisorQuestion}
+                  onChange={(e) => setAdvisorQuestion(e.target.value)}
+                  style={{
+                    flex: 1,
+                    background: '#0B0C18',
+                    border: '1px solid #1E2D4A',
+                    borderRadius: '8px',
+                    padding: '9px 14px',
+                    color: 'white',
+                    fontSize: '13px',
+                    outline: 'none',
+                    transition: 'border-color 0.2s'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#4F46E5'}
+                  onBlur={(e) => e.target.style.borderColor = '#1E2D4A'}
+                />
+                <button
+                  type="submit"
+                  disabled={!advisorQuestion.trim()}
+                  style={{
+                    background: '#4F46E5',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '9px 18px',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    cursor: advisorQuestion.trim() ? 'pointer' : 'default',
+                    opacity: advisorQuestion.trim() ? 1 : 0.5,
+                    transition: 'all 0.2s',
+                    boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)'
+                  }}
+                  onMouseOver={(e) => { if (advisorQuestion.trim()) e.target.style.background = '#4338CA'; }}
+                  onMouseOut={(e) => { e.target.style.background = '#4F46E5'; }}
+                >
+                  Ask
+                </button>
+              </form>
+            </>
+          )}
         </div>
       </div>
 
@@ -467,7 +751,22 @@ function ForecastPanel({ route }) {
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
         
+        .quick-chip {
+          transition: all 0.2s ease !important;
+        }
+
+        .quick-chip:hover {
+          background: rgba(79, 70, 229, 0.3) !important;
+          border-color: rgba(129, 140, 248, 0.65) !important;
+          transform: translateY(-1px);
+        }
+
+        .quick-chip:active {
+          transform: translateY(0);
+        }
+
         /* ─── Calendar Styling ─── */
         .calendar-card {
           background: #131D35;
@@ -498,6 +797,15 @@ function ForecastPanel({ route }) {
         .calendar-card.selected:hover {
           background: linear-gradient(135deg, #1D4ED8, #6D28D9) !important;
           transform: translateY(-2px);
+        }
+
+        .calendar-card.optimal {
+          border: 1.5px solid #EAB308 !important;
+          position: relative;
+        }
+
+        .calendar-card.optimal:not(.selected) {
+          box-shadow: 0 0 8px rgba(234, 179, 8, 0.15);
         }
       `}</style>
     </div>

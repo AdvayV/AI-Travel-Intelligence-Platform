@@ -1,8 +1,9 @@
 import logging
+import httpx
+import os
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from gds_client import get_top_destinations
-from chronos_engine import forecast_route_demand
 from weather_client import get_weather_score
 from trends_client import get_trend_scores
 from scoring import compute_surge_pricing_v2, rank_routes
@@ -69,6 +70,9 @@ def run_pipeline():
         # Batch-fetch all weather scores so we can do alternate-route comparisons
         all_weather_scores = get_weather_score(list(all_dests))
 
+        # Batch-fetch all trend scores
+        all_trend_scores = get_trend_scores(list(all_dests))
+
         for dest in all_dests:
             history = {
                 "12w": snapshots.get("12w", {}).get(dest, 0.0),
@@ -76,12 +80,8 @@ def run_pipeline():
                 "2w":  snapshots.get("2w",  {}).get(dest, 0.0),
             }
 
-            # Chronos time-series forecast
-            chronos_result = forecast_route_demand(history)
-
             # Trend score
-            trend_scores = get_trend_scores([dest])
-            t_score = trend_scores.get(dest, 0.0)
+            t_score = all_trend_scores.get(dest, 0.0)
             w_score = all_weather_scores.get(dest, 0.5)
 
             # Alternate routes for this destination
@@ -89,15 +89,13 @@ def run_pipeline():
 
             # ── v2 full pricing pipeline ──────────────────────────────────
             pricing = compute_surge_pricing_v2(
-                gds_momentum=history["2w"],
+                origin=origin,
+                destination=dest,
                 trend_score=t_score,
                 weather_score=w_score,
-                chronos_momentum_pct=chronos_result["momentum_pct"],
-                origin=origin,
-                dest=dest,
-                alternate_dests=alt_dests,
-                all_weather_scores=all_weather_scores,
+                weathercode=0,
                 forecast_day=0,   # 0 = today's view
+                alternate_weather_scores=all_weather_scores,
             )
             # ─────────────────────────────────────────────────────────────
 
@@ -113,15 +111,14 @@ def run_pipeline():
             gds_dir   = "up" if gds_diff < 0 else "down"
             gds_momentum = abs(int(gds_diff * 100))
 
+            date_str = datetime.now().strftime('%Y-%m-%d')
             signal_explanation = (
-                f"[v2] GDS GDS demand {gds_dir} {gds_momentum}% over 12 weeks. "
+                f"[v2] Demand {gds_dir} {gds_momentum}% over 12 weeks. "
                 f"Google Trends signal {trend_word}. "
-                f"Weather at {dest}: {pricing['weather_label']} "
-                f"(score {round(w_score, 2)}, ×{pricing['weather_multiplier']}). "
-                f"Chronos model forecasts {chronos_result['trend']} demand — "
-                f"momentum {chronos_result['momentum_pct']:+.1f}%. "
-                f"Temporal decay factor: {pricing['temporal_decay']}. "
-                f"Alternate-route adj: {pricing['alt_route_delta']:+.3f}. "
+                f"Weather at {dest} on {date_str}: {pricing['weather_label']} "
+                f"({round(w_score, 2):.2f}, x{pricing['weather_multiplier']:.2f}). "
+                f"Temporal decay factor: {pricing['temporal_decay']:.1f}. "
+                f"Alternate-route adj: {pricing['alt_route_delta']:+.4f}. "
                 f"Final surge: {surge_mult:.2f}x"
                 + (" [CAPPED]" if pricing.get("capped") else "") + "."
             )
@@ -135,7 +132,6 @@ def run_pipeline():
                 # Raw parameters for recomputation
                 "raw_gds_momentum": history["2w"],
                 "raw_trend_score": t_score,
-                "raw_chronos_momentum_pct": chronos_result["momentum_pct"],
                 "raw_weather_score": w_score,
 
                 # Opportunity score
@@ -143,12 +139,12 @@ def run_pipeline():
                 "tier":             tier,
                 "raw_base":         pricing["raw_base"],
 
-                # Chronos
-                "trend":            chronos_result["trend"],
-                "momentum_pct":     round(chronos_result["momentum_pct"], 1),
-                "mean_demand":      round(chronos_result["mean_demand"], 3),
-                "peak_demand":      round(chronos_result["peak_demand"], 3),
-                "weekly_forecast":  [round(x, 3) for x in chronos_result["weekly_forecast"]],
+                # Chronos default placeholders
+                "trend":            "stable",
+                "momentum_pct":     0.0,
+                "mean_demand":      0.0,
+                "peak_demand":      0.0,
+                "weekly_forecast":  [0.7, 0.7],
 
                 # Weather
                 "weather_score":    round(w_score, 2),
@@ -210,6 +206,73 @@ def get_single_forecast(origin, dest):
     return FORECAST_CACHE.get(f"{origin}-{dest}")
 
 
+# ---------------------------------------------------------------------------
+# Hugging Face Agent Travel Advisor
+# ---------------------------------------------------------------------------
+
+def find_optimal_day(base_forecast: dict, weather_detail: dict) -> dict:
+    """
+    Find the day offset (0 to 13) with the best ratio of weather appeal to surge price.
+    """
+    days = weather_detail.get("days", [])
+    if not days:
+        return {}
+        
+    origin = base_forecast["origin"]
+    dest = base_forecast["destination"]
+    trend_score = base_forecast.get("raw_trend_score", 0.0)
+    base_price = base_forecast.get("base_price", 300.0)
+    
+    best_offset = 0
+    best_ratio = -1.0
+    best_details = {}
+    
+    for offset in range(len(days)):
+        day_weather = days[offset]
+        w_score = day_weather.get("appeal", 0.5)
+        day_weathercode = int(day_weather.get("weather_code", 0))
+        
+        # Get alternate routes weather scores for the same day offset
+        alt_dests = ALTERNATE_ROUTES.get(dest, [])
+        alt_weather_scores = {}
+        for alt in alt_dests:
+            from weather_client import get_weather_detail
+            alt_detail = get_weather_detail(alt)
+            if "days" in alt_detail and offset < len(alt_detail["days"]):
+                alt_weather_scores[alt] = alt_detail["days"][offset].get("appeal", 0.5)
+            else:
+                alt_weather_scores[alt] = 0.5
+                
+        pricing = compute_surge_pricing_v2(
+            origin=origin,
+            destination=dest,
+            trend_score=trend_score,
+            weather_score=w_score,
+            weathercode=day_weathercode,
+            forecast_day=offset,
+            alternate_weather_scores=alt_weather_scores,
+        )
+        
+        surge_mult = pricing["multiplier"]
+        # Calculate ratio: weather appeal / surge multiplier
+        ratio = w_score / max(0.1, surge_mult)
+        
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_offset = offset
+            best_details = {
+                "optimal_day_offset": offset,
+                "optimal_date": day_weather.get("date"),
+                "optimal_weather_appeal": w_score,
+                "optimal_price": round(base_price * surge_mult, 2),
+                "optimal_surge_multiplier": surge_mult,
+                "optimal_weather_emoji": day_weather.get("emoji", "🌤"),
+                "optimal_weather_condition": day_weather.get("condition", "Clear")
+            }
+            
+    return best_details
+
+
 def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
     """
     Recompute opportunity score and pricing for a specific day offset (0 to 13).
@@ -220,16 +283,17 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
     # 1. Retrieve raw signals
     gds_momentum = base_forecast.get("raw_gds_momentum", 0.5)
     trend_score = base_forecast.get("raw_trend_score", 0.0)
-    chronos_momentum_pct = base_forecast.get("raw_chronos_momentum_pct", 0.0)
     
     # 2. Get weather for primary destination on that specific day
     from weather_client import get_weather_detail
     weather_detail = get_weather_detail(dest)
     w_score = base_forecast.get("raw_weather_score", 0.5)
     day_weather = None
+    day_weathercode = 0
     if "days" in weather_detail and day_offset < len(weather_detail["days"]):
         day_weather = weather_detail["days"][day_offset]
         w_score = day_weather.get("appeal", w_score)
+        day_weathercode = int(day_weather.get("weather_code", 0))
         
     # 3. Get alternate routes weather scores for the same day offset
     alt_dests = ALTERNATE_ROUTES.get(dest, [])
@@ -243,15 +307,13 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
             
     # 4. Recompute surge pricing
     pricing = compute_surge_pricing_v2(
-        gds_momentum=gds_momentum,
+        origin=origin,
+        destination=dest,
         trend_score=trend_score,
         weather_score=w_score,
-        chronos_momentum_pct=chronos_momentum_pct,
-        origin=origin,
-        dest=dest,
-        alternate_dests=alt_dests,
-        all_weather_scores=alt_weather_scores,
+        weathercode=day_weathercode,
         forecast_day=day_offset,
+        alternate_weather_scores=alt_weather_scores,
     )
     
     # 5. Build signal explanation
@@ -265,22 +327,14 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
     gds_dir = "up" if gds_diff < 0 else "down"
     gds_momentum = abs(int(gds_diff * 100))
     
-    # Chronos details
-    chronos_trend = base_forecast.get("trend", "stable")
-    
-    date_label = ""
-    if day_weather and "date" in day_weather:
-        date_label = f" on {day_weather['date']}"
-        
+    date_str = day_weather['date'] if (day_weather and 'date' in day_weather) else datetime.now().strftime('%Y-%m-%d')
     signal_explanation = (
-        f"[v2] GDS GDS demand {gds_dir} {gds_momentum}% over 12 weeks. "
+        f"[v2] Demand {gds_dir} {gds_momentum}% over 12 weeks. "
         f"Google Trends signal {trend_word}. "
-        f"Weather at {dest}{date_label}: {pricing['weather_label']} "
-        f"(score {round(w_score, 2)}, ×{pricing['weather_multiplier']}). "
-        f"Chronos model forecasts {chronos_trend} demand — "
-        f"momentum {chronos_momentum_pct:+.1f}%. "
-        f"Temporal decay factor: {pricing['temporal_decay']}. "
-        f"Alternate-route adj: {pricing['alt_route_delta']:+.3f}. "
+        f"Weather at {dest} on {date_str}: {pricing['weather_label']} "
+        f"({round(w_score, 2):.2f}, x{pricing['weather_multiplier']:.2f}). "
+        f"Temporal decay factor: {pricing['temporal_decay']:.1f}. "
+        f"Alternate-route adj: {pricing['alt_route_delta']:+.4f}. "
         f"Final surge: {pricing['multiplier']:.2f}x"
         + (" [CAPPED]" if pricing.get("capped") else "") + "."
     )
@@ -305,6 +359,10 @@ def recompute_forecast_for_day(base_forecast: dict, day_offset: int) -> dict:
         "selected_day_offset": day_offset,
     })
     
+    # Calculate optimal day
+    optimal_info = find_optimal_day(base_forecast, weather_detail)
+    updated.update(optimal_info)
+
     if day_weather:
         updated["selected_date"] = day_weather.get("date")
         updated["selected_weather"] = day_weather

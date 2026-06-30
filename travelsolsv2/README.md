@@ -75,7 +75,7 @@ This application runs entirely on zero-cost infrastructure and local resources:
 ### 3. Setup and Run Backend (v2)
 Navigate to the backend folder:
 ```bash
-cd travelroute_v2/backend
+cd travelsolsv2/backend
 ```
 
 Create a virtual environment and activate it:
@@ -99,7 +99,7 @@ On startup, the backend automatically initializes database constraints, seeds 15
 ### 4. Setup and Run Frontend (v2)
 Open a new terminal window and navigate to the frontend directory:
 ```bash
-cd travelroute_v2/frontend
+cd travelsolsv2/frontend
 ```
 
 Install node packages:

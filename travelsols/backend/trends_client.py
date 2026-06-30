@@ -154,13 +154,14 @@ def get_trend_scores(dest_codes: list[str]) -> dict[str, float]:
 
         if pytrends_available:
             # Small delay between requests to avoid rate-limiting
-            time.sleep(1.2)
+            time.sleep(0.2)
             score = _fetch_single(pytrends_obj, code)
 
             if score is None:
-                # Back-off and retry once
-                time.sleep(3.0)
-                score = _fetch_single(pytrends_obj, code)
+                # If first fetch fails, it means we are likely blocked/rate-limited.
+                # Deactivate pytrends for this refresh batch to avoid hanging the scheduler.
+                pytrends_available = False
+                logger.info(f"Google Trends fetch failed for {code}. Bypassing pytrends for remaining uncached destinations to prevent delay.")
 
         # Still None → use deterministic fallback
         if score is None:

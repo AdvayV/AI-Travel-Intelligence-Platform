@@ -16,7 +16,7 @@ Hard cap: surge multiplier never exceeds 2.50x (250 % of base price).
 
 import math
 import logging
-from typing import Optional
+from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -77,22 +77,10 @@ def weather_multiplier_from_score(weather_score: float) -> float:
 # ---------------------------------------------------------------------------
 
 def compute_temporal_decay(forecast_day: int) -> float:
-    """
-    Returns a decay factor in [0.50, 1.00].
-
-    Day 0–3  : 1.00 (full confidence — near-term)
-    Day 4–7  : 0.90
-    Day 8–14 : 0.80
-    Day 15+  : 0.50 (low confidence — far future)
-    """
-    if forecast_day <= 3:
+    if forecast_day <= 7:
         return 1.00
-    elif forecast_day <= 7:
-        return 0.90
-    elif forecast_day <= 14:
-        return 0.80
     else:
-        return 0.50
+        return 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -140,104 +128,58 @@ def get_alternate_route_adjustment(
         return -0.10  # primary much worse → travellers prefer alternates
 
 
+def get_base_price(origin: str, dest: str) -> float:
+    """Deterministic base price seeded from route pair."""
+    seed = sum(ord(c) for c in origin + dest)
+    return 300 + (seed % 900)
+
+
 # ---------------------------------------------------------------------------
-# 4. Core v2 opportunity score
+# 4. Core v2 opportunity score & demand score (Chronos removed)
 # ---------------------------------------------------------------------------
 
-# Weights must sum to 1.0
-_W_GDS    = 0.40   # GDS booking momentum (most reliable real-world signal)
-_W_CHRONOS  = 0.25   # AI time-series forecast momentum
-_W_WEATHER  = 0.20   # Weather appeal (MULTIPLICATIVE after scoring)
-_W_TRENDS   = 0.15   # Google Trends consumer intent
+def compute_demand_score(trend_score: float) -> float:
+    '''
+    Demand score from Google Trends only (Chronos forecast removed).
+    '''
+    return round(min(max(trend_score, 0.0), 1.0), 4)
 
 
 def compute_opportunity_score_v2(
-    gds_momentum: float,
     trend_score: float,
     weather_score: float,
-    chronos_momentum_pct: float,
     forecast_day: int = 0,
 ) -> dict:
     """
-    Compute a v2 opportunity score [0–100] with multiplicative weather boost.
-
-    Parameters
-    ----------
-    gds_momentum      : float  GDS demand signal in [0, 1]
-    trend_score         : float  Google Trends signal in [0, 1]
-    weather_score       : float  Open-Meteo appeal score in [0, 1]
-    chronos_momentum_pct: float  Chronos forecast momentum in %  (-∞, +∞), normalised internally
-    forecast_day        : int    Days ahead (0 = today, 7 = next week …)
-
-    Returns
-    -------
-    dict with keys: score (float), tier (str), weather_multiplier (float),
-                    temporal_decay (float), raw_base (float)
+    Compute a v2 opportunity score [0–100] using the new weighting.
     """
-    # --- Base additive score (ignores weather) ---
-    chronos_norm = min(max(chronos_momentum_pct / 100.0, -1.0), 1.0)
-    # Shift chronos to [0,1]: neutral at 0.5
-    chronos_0_1 = (chronos_norm + 1.0) / 2.0
-
-    base = (
-        gds_momentum  * _W_GDS   +
-        chronos_0_1     * _W_CHRONOS +
-        trend_score     * _W_TRENDS
+    demand_score = compute_demand_score(trend_score)
+    opportunity_score = round(
+        (demand_score * 0.55 + (1 - weather_score) * 0.45) * 100, 1
     )
 
-    # --- Multiplicative weather boost ---
-    w_mult = weather_multiplier_from_score(weather_score)
-    # Weather contribution is multiplicative: good weather amplifies demand,
-    # bad weather suppresses it, using a blended approach so that
-    # weather doesn't zero-out an otherwise strong signal.
-    weather_contribution = weather_score * _W_WEATHER
-    boosted = (base + weather_contribution) * w_mult
-
-    # --- Temporal decay ---
-    decay = compute_temporal_decay(forecast_day)
-    final = boosted * decay * 100.0   # scale to 0–100
-
-    # Clamp
-    final = max(0.0, min(100.0, final))
-
-    # --- 5-tier classification ---
-    if final >= 80:
+    if opportunity_score >= 80:
         tier = "PLATINUM"
-    elif final >= 65:
+    elif opportunity_score >= 65:
         tier = "HOT"
-    elif final >= 45:
+    elif opportunity_score >= 45:
         tier = "RISING"
-    elif final >= 25:
+    elif opportunity_score >= 25:
         tier = "WATCH"
     else:
         tier = "COLD"
 
+    # Weather multiplier
+    w_mult = weather_multiplier_from_score(weather_score)
+    decay = compute_temporal_decay(forecast_day)
+
     return {
-        "score":            round(final, 1),
+        "score":            opportunity_score,
         "tier":             tier,
         "weather_multiplier": round(w_mult, 3),
         "temporal_decay":   round(decay, 2),
-        "raw_base":         round(base * 100, 1),
+        "raw_base":         round(demand_score * 100, 1),
     }
-
-
-# Keep legacy alias for any code still calling the old function name
-def compute_opportunity_score(
-    gds_momentum: float,
-    trend_score: float,
-    weather_score: float,
-    chronos_momentum_pct: float,
-) -> dict:
-    """Legacy wrapper — delegates to v2 with forecast_day=0."""
-    result = compute_opportunity_score_v2(
-        gds_momentum=gds_momentum,
-        trend_score=trend_score,
-        weather_score=weather_score,
-        chronos_momentum_pct=chronos_momentum_pct,
-        forecast_day=0,
-    )
-    # Back-compat: strip v2-only keys if caller only expects score + tier
-    return {"score": result["score"], "tier": result["tier"]}
 
 
 # ---------------------------------------------------------------------------
@@ -255,48 +197,25 @@ def compute_surge_multiplier_v2(
 ) -> dict:
     """
     Compute the final surge multiplier from the v2 opportunity score.
-
-    Formula (additive stages, then capped):
-      1. Base surge from opportunity score  — steeper curve above 45
-      2. Weather amplification bonus        — multiplicative component
-      3. Alternate-route competitive delta  — additive fine-tuning
-      4. Hard cap at 2.50x
-
-    Returns dict with: multiplier, capped, weather_boost, components
     """
-    # 1. Demand-driven base surge
-    # COLD (<25)     : 0.75x – 0.90x   genuine discount to stimulate demand
-    # WATCH (25–45)  : 0.90x – 1.00x   near-flat, slight suppression
-    # RISING (45–65) : 1.00x – 1.40x   growing demand premium
-    # HOT (65–80)    : 1.40x – 1.85x   high-demand surge
-    # PLATINUM (80+) : 1.85x – 2.50x   peak / capped at ceiling
     if opportunity_score < 25:
-        # COLD: real discount — maps score 0→24 to 0.75→0.90
         base_surge = 0.75 + (opportunity_score / 25.0) * 0.15
     elif opportunity_score < 45:
-        # WATCH: 0.90 → 1.00
         base_surge = 0.90 + ((opportunity_score - 25) / 20.0) * 0.10
     elif opportunity_score < 65:
-        # RISING: 1.00 → 1.40
         base_surge = 1.00 + ((opportunity_score - 45) / 20.0) * 0.40
     elif opportunity_score < 80:
-        # HOT: 1.40 → 1.85
         base_surge = 1.40 + ((opportunity_score - 65) / 15.0) * 0.45
     else:
-        # PLATINUM: 1.85 → 2.50
         base_surge = 1.85 + ((opportunity_score - 80) / 20.0) * 0.65
 
-    # 2. Weather multiplicative boost (only applies positive uplift)
     weather_boost = max(0.0, weather_multiplier - 1.0) * 0.30
     surged = base_surge + weather_boost
-
-    # 3. Alternate-route competitive adjustment
     surged += alternate_route_delta
 
-    # 4. Clamp: cap at 2.50x, floor at 0.75x
     capped = surged > _SURGE_CAP
     final_multiplier = min(surged, _SURGE_CAP)
-    final_multiplier = max(final_multiplier, 0.75)  # never below 75% of base
+    final_multiplier = max(final_multiplier, 0.75)
 
     return {
         "multiplier":         round(final_multiplier, 4),
@@ -313,57 +232,129 @@ def compute_surge_multiplier_v2(
 # ---------------------------------------------------------------------------
 
 def compute_surge_pricing_v2(
-    gds_momentum: float,
+    origin: str,
+    destination: str,
     trend_score: float,
     weather_score: float,
-    chronos_momentum_pct: float,
-    origin: str = "",
-    dest: str = "",
-    alternate_dests: Optional[list[str]] = None,
-    all_weather_scores: Optional[dict[str, float]] = None,
-    forecast_day: int = 0,
+    weathercode: int = 0,
+    forecast_day: int = 7,
+    alternate_weather_scores: Optional[Dict[str, float]] = None,
 ) -> dict:
     """
     One-call full pipeline: score → multiplier → price signals.
-
-    Returns a merged dict suitable for the FORECAST_CACHE entry.
     """
-    alternate_dests = alternate_dests or []
-    all_weather_scores = all_weather_scores or {}
+    alternate_weather_scores = alternate_weather_scores or {}
 
-    # Opportunity score
-    score_data = compute_opportunity_score_v2(
-        gds_momentum=gds_momentum,
-        trend_score=trend_score,
-        weather_score=weather_score,
-        chronos_momentum_pct=chronos_momentum_pct,
-        forecast_day=forecast_day,
+    # 1. Demand score
+    demand_score = compute_demand_score(trend_score)
+
+    # 2. Opportunity score
+    opportunity_score = round(
+        (demand_score * 0.55 + (1 - weather_score) * 0.45) * 100, 1
     )
 
-    # Competitive route adjustment
-    alt_delta = get_alternate_route_adjustment(
-        origin=origin,
-        primary_dest=dest,
-        alternate_dests=alternate_dests,
-        weather_scores=all_weather_scores,
-    )
+    # 3. Tier classification
+    if opportunity_score >= 80:
+        tier = "PLATINUM"
+    elif opportunity_score >= 65:
+        tier = "HOT"
+    elif opportunity_score >= 45:
+        tier = "RISING"
+    elif opportunity_score >= 25:
+        tier = "WATCH"
+    else:
+        tier = "COLD"
 
-    # Surge multiplier
-    surge_data = compute_surge_multiplier_v2(
-        opportunity_score=score_data["score"],
-        weather_score=weather_score,
-        weather_multiplier=score_data["weather_multiplier"],
-        alternate_route_delta=alt_delta,
-    )
+    # 4. Base surge from opportunity score
+    if opportunity_score < 25:
+        base_surge = 0.75 + (opportunity_score / 25.0) * 0.15
+    elif opportunity_score < 45:
+        base_surge = 0.90 + ((opportunity_score - 25) / 20.0) * 0.10
+    elif opportunity_score < 65:
+        base_surge = 1.00 + ((opportunity_score - 45) / 20.0) * 0.40
+    elif opportunity_score < 80:
+        base_surge = 1.40 + ((opportunity_score - 65) / 15.0) * 0.45
+    else:
+        base_surge = 1.85 + ((opportunity_score - 80) / 20.0) * 0.65
 
-    # Weather label for frontend display
+    # 5. Weather surge & condition label
+    if weathercode != 0:
+        weather_condition = "Unknown"
+        weather_surge = 1.0
+        for code_range, label, mult in WEATHER_CODE_MULTIPLIERS:
+            if weathercode in code_range:
+                weather_condition = label
+                weather_surge = mult
+                break
+    else:
+        weather_surge = weather_multiplier_from_score(weather_score)
+        weather_condition = _weather_label(weather_score)
+
+    # 6. Demand x Weather interaction
+    interaction = round(1.0 + (demand_score * weather_score * 0.1), 2)
+
+    # 7. Temporal decay
+    temporal_decay = compute_temporal_decay(forecast_day)
+
+    # 8. Alternate/competitive route adjustment
+    alt_dests = [d for d in alternate_weather_scores.keys() if d != destination]
+    if alt_dests:
+        alt_delta = get_alternate_route_adjustment(
+            origin=origin,
+            primary_dest=destination,
+            alternate_dests=alt_dests,
+            weather_scores=alternate_weather_scores,
+        )
+    else:
+        alt_delta = 0.0
+
+    competitive_adj = round(1.0 + alt_delta, 2)
+    if alt_delta == 0.0:
+        competitive_reason = "neutral (1.00x)"
+    elif alt_delta > 0.0:
+        competitive_reason = f"favorable weather vs alternates (+{alt_delta:.2f}x)"
+    else:
+        competitive_reason = f"unfavorable weather vs alternates ({alt_delta:.2f}x)"
+
+    # 9. Final surge multiplier calculation
+    final_surge = base_surge * weather_surge * interaction * temporal_decay * competitive_adj
+    final_surge_multiplier = round(min(max(final_surge, 0.75), 2.50), 2)
+    capped = final_surge > 2.50
+
+    # 10. Pricing in INR
+    base_price_inr = int(get_base_price(origin, destination))
+    surge_price_inr = int(base_price_inr * final_surge_multiplier)
+
+    # 11. Reasoning parts
+    reasoning_parts = [
+        f'Demand score {demand_score:.2f} (Google Trends 100%)',
+        f'Weather: {weather_condition} (score {weather_score:.2f}, {weather_surge:.2f}x surge) — highest priority factor',
+        f'Demand x Weather interaction: {interaction:.2f}x',
+        f'Temporal decay day-{forecast_day}: {temporal_decay:.2f}x',
+        f'Competitive routing: {competitive_reason}',
+        f'Final: {base_surge:.2f} x {weather_surge:.2f} x {interaction:.2f} x {temporal_decay:.2f} x {competitive_adj:.2f} = {final_surge:.2f}x',
+    ]
+    surge_reasoning = " | ".join(reasoning_parts)
+
     weather_label = _weather_label(weather_score)
 
     return {
-        **score_data,
-        **surge_data,
-        "weather_label":      weather_label,
-        "surge_version":      "v2",
+        "score":                    opportunity_score,
+        "opportunity_score":        opportunity_score,
+        "tier":                     tier,
+        "base_surge":               round(base_surge, 4),
+        "weather_boost":            round(weather_surge, 4),
+        "alt_route_delta":          round(alt_delta, 4),
+        "temporal_decay":           round(temporal_decay, 2),
+        "multiplier":               final_surge_multiplier,
+        "final_surge_multiplier":   final_surge_multiplier,
+        "capped":                   capped,
+        "base_price_inr":           base_price_inr,
+        "surge_price_inr":          surge_price_inr,
+        "surge_reasoning":          surge_reasoning,
+        "weather_label":            weather_label,
+        "weather_multiplier":       round(weather_surge, 3),
+        "raw_base":                 round(demand_score * 100, 1),
     }
 
 
@@ -378,6 +369,22 @@ def _weather_label(score: float) -> str:
         return "Poor 🌧"
     else:
         return "Severe ⛈"
+
+
+def compute_opportunity_score(trend_score: float, weather_score: float) -> dict:
+    result = compute_surge_pricing_v2(
+        origin='BOM', destination='DXB',
+        trend_score=trend_score,
+        weather_score=weather_score,
+    )
+    return {
+        'score': result['opportunity_score'],
+        'tier': result['tier'],
+        'surge_multiplier': result['final_surge_multiplier'],
+        'base_price': result['base_price_inr'],
+        'surge_price': result['surge_price_inr'],
+        'surge_reasoning': result['surge_reasoning'],
+    }
 
 
 # ---------------------------------------------------------------------------

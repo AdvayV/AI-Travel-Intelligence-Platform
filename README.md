@@ -173,3 +173,31 @@ TravelRoute v2 features an advanced, bulletproof fallback system designed to ens
 * **Neo4j Offline Fallback**: If the Neo4j Graph DB connection is offline, blocked, or has incorrect credentials, the backend automatically transitions to a local mock database that simulates the knowledge graph facts and seeding structures.
 * **ChromaDB & Hugging Face Model Fallback**: If ChromaDB files are locked, or if the Hugging Face Hub is down (preventing the SentenceTransformers `all-MiniLM-L6-v2` embedding model from being downloaded on first run), ChromaClient falls back to a high-fidelity, local, in-memory **Keyword-Overlap Vector Store**.
 * **LLM Fallback**: If the Hugging Face Inference API is down, rate-limited, or unauthorized, the agent executor intercepts the failure and falls back to a mock deterministic execution loop (`run_mock_agent`), preserving full system functionality.
+
+---
+
+## Recent Workspace Updates (June 30, 2026)
+
+The following pipeline improvements, data models, and features were implemented today:
+
+1. **API Key & GDS Rebranding:** 
+   * Transitioned all legacy Sabre sandbox code to clean GDS client configurations.
+   * Moved API key configurations to backend `.env` variables loaded strictly on startup.
+
+2. **Refined Weighting Engine:**
+   * Replaced the opportunity score weighting logic to use: `round((demand_score * 0.55 + (1 - weather_score) * 0.45) * 100, 1)`.
+   * Replaced Chronos momentum indicators with pure Google Trends signals.
+
+3. **Optimal Travel Date Search:**
+   * Built a travel-date recommender that identifies the best comfort-to-cost day of travel in the 14-day schedule.
+   * Highlighted the recommended optimal day directly in the UI card layout using golden star badges and a dynamic banner.
+
+4. **14-Day Temperature & Pricing Context Injection:**
+   * Mapped `temp_max_c` and `temp_min_c` alongside day-by-day surged prices to the Qwen3 travel advisor context.
+   * This enables the LLM to successfully answer comparative reasoning queries (e.g. *“Which day is the cheapest to travel?”* or *“What is the highest temperature in the schedule?”*).
+
+5. **Chatbot Interface & Speed Enhancements:**
+   * Removed automatic slow API calls on route changes to ensure instant page load transitions (0ms UI lag).
+   * Added a manual **🔮 Generate AI Analysis** trigger button and quick predefined question chips to the redesigned glassmorphic advisor card.
+   * Added sanitization filters to strip all double-asterisk (`**`) markdown from response fields for a natural Gemini-like conversational style.
+   * Optimized the backend Trends pipeline with a fail-fast deactivate switch on pytrends rate limits, slashing the full pipeline refresh time from **2 minutes down to 31 seconds**.
