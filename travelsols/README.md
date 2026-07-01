@@ -6,12 +6,43 @@ Route Intelligence is an Autonomous Travel Demand Forecasting and Dynamic Pricin
 
 ## 1. Core Logic & Pricing Model
 
-### Dynamic Weighting Engine
-The opportunities are ranked using a unified **Opportunity Score** ($0\text{–}100$) derived from live consumer interest and destination comfort signals.
-* **Google Trends Component:** Normalised consumer query interest ($0.0\text{–}1.0$) representing $55\%$ of the score.
-* **Weather Comfort Component:** Travel appeal score ($0.0\text{–}1.0$) based on precipitation and temperature representing $45\%$ of the score.
-* **Surge Pricing Formula:**
-  $$\text{Opportunity Score} = \text{round}((\text{Demand} \times 0.55 + (1.0 - \text{Weather Score}) \times 0.45) \times 100, 1)$$
+### Raw Base Score (Demand Score)
+The **Raw Base** represents the clean demand interest of a route extracted entirely from normalized Google Trends search volume data:
+$$\text{Demand Score} = \text{clamp}(\text{Trend Score}, 0.0, 1.0)$$
+$$\text{Raw Base (\%)} = \text{round}(\text{Demand Score} \times 100, 1)$$
+
+### Dynamic Opportunity Score
+The **Opportunity Score** is a weighted rating from `0` to `100` that evaluates how favorable a travel route currently is. It combines high traveler interest with good weather at the destination (where $1.0 - \text{Weather Score}$ represents good weather):
+$$\text{Opportunity Score} = \text{round}\left( \left( \text{Demand Score} \times 0.55 + (1.0 - \text{Weather Score}) \times 0.45 \right) \times 100, 1 \right)$$
+* **Demand Weight:** 55%
+* **Inverse Weather Comfort Weight:** 45%
+
+### Opportunity Tiers
+* **$\ge 80$:** `PLATINUM` (Extremely high demand/perfect weather)
+* **$65 - 79$:** `HOT`
+* **$45 - 64$:** `RISING`
+* **$25 - 44$:** `WATCH`
+* **$< 25$:** `COLD` (Triggers discount pricing)
+
+### Base Surge Multiplier
+The **Base Surge** is calculated progressively depending on which tier bracket the Opportunity Score falls into:
+* **Cold ($< 25$):** 
+  $$\text{Base Surge} = 0.75 + \left(\frac{\text{Opportunity Score}}{25.0}\right) \times 0.15 \quad \text{[0.75× to 0.90× discounts]}$$
+* **Watch ($25 - 44$):** 
+  $$\text{Base Surge} = 0.90 + \left(\frac{\text{Opportunity Score} - 25}{20.0}\right) \times 0.10 \quad \text{[0.90× to 1.00× standard]}$$
+* **Rising ($45 - 64$):** 
+  $$\text{Base Surge} = 1.00 + \left(\frac{\text{Opportunity Score} - 45}{20.0}\right) \times 0.40 \quad \text{[1.00× to 1.40× surges]}$$
+* **Hot ($65 - 79$):** 
+  $$\text{Base Surge} = 1.40 + \left(\frac{\text{Opportunity Score} - 65}{15.0}\right) \times 0.45 \quad \text{[1.40× to 1.85× surges]}$$
+* **Platinum ($\ge 80$):** 
+  $$\text{Base Surge} = 1.85 + \left(\frac{\text{Opportunity Score} - 80}{20.0}\right) \times 0.65 \quad \text{[1.85× to 2.50× maximum surge]}$$
+
+### Final Surged Multiplier
+The final multiplier applied to the base ticket fare adds weather-based adjustments and alternate routing details:
+$$\text{Final Surge} = \text{clamp}(\text{Base Surge} + \text{Weather Boost} + \text{Alternate Route Delta}, 0.75, 2.50)$$
+* **Weather Boost:** calculated as $\max(0.0, \text{Weather Multiplier} - 1.0) \times 0.30$.
+* **Surge Cap Ceiling:** Hard-capped at **`2.50×`** (flags `CAPPED` on the travel cards).
+* **Surge Floor:** Floor-limited to **`0.75×`** (ensuring maximum discount never falls below 25% off base fare).
 
 ### Optimal Date Recommendation
 Analyzes the 14-day schedule to automatically select and recommend the single best day to fly based on:
