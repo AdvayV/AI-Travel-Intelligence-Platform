@@ -433,69 +433,104 @@ def api_run_nl_query(body: NLQueryRequest):
         answer = ""
         results = []
         
-        # 1. Translate question to Cypher
-        prompt = (
-            f"You are a Neo4j Cypher expert. Translate this natural language question into a valid Cypher query.\n"
-            f"Question: \"{body.question}\"\n\n"
-            f"Neo4j Schema details:\n"
-            f"- Nodes: Airport (code, name), Airline (code, name, alliance), CorporatePolicy (id, name, allowed_cabins, allowed_fare_classes, max_fare_inr, min_advance_days, preferred_airlines, requires_approval_above_inr), Passenger (name, tier), Waiver (id, type, description, valid_from, valid_until, fee_waived, discount_pct)\n"
-            f"- Nodes from PDF ingestion: PolicyDocument (name), PolicySection (id, title), PolicyRule (id, snippet, max_fare_inr, min_advance_days, requires_approval, page, allowed_cabins, allowed_fare_classes), EmployeeTier (id, name)\n"
-            f"- Relationships:\n"
-            f"  (:Airport)-[:ROUTE {{airlines, distance_km}}]->(:Airport)\n"
-            f"  (:Passenger)-[:HAS_POLICY]->(:CorporatePolicy)\n"
-            f"  (:Airport)-[:HAS_WAIVER]->(:Waiver)\n"
-            f"  (:PolicyDocument)-[:HAS_SECTION]->(:PolicySection)\n"
-            f"  (:PolicyDocument)-[:CONTAINS_RULE]->(:PolicyRule)\n"
-            f"  (:PolicyRule)-[:GOVERNS_POLICY]->(:CorporatePolicy)\n"
-            f"  (:PolicyRule)-[:PERMITS_FARE_CLASS]->(:FareClass)\n"
-            f"  (:PolicyRule)-[:PREFERRED_AIRLINE]->(:Airline)\n"
-            f"  (:EmployeeTier)-[:GOVERNED_BY]->(:PolicyRule)\n\n"
-            f"Guidelines:\n"
-            f"- Use case-insensitive matching where appropriate (e.g. `toLower(p.name) CONTAINS toLower('...')`).\n"
-            f"- Return ONLY the raw Cypher query code. Do not include markdown code block syntax (like ```cypher or ```), explanations, or extra text."
-        )
-        
-        if use_gemini:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
-                headers = {"Content-Type": "application/json"}
-                payload = {
-                    "contents": [{
-                        "parts": [{"text": prompt}]
-                    }]
-                }
-                with httpx.Client(timeout=20.0) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    raw_cypher = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    cypher_query = re.sub(r"^```(?:cypher|neo4j)?\n|```$", "", raw_cypher, flags=re.MULTILINE).strip()
-            except Exception as e:
-                logger.error(f"Gemini Cypher translation failed: {e}")
-        else:
-            from agent.booking_agent import _llm
-            if _llm:
-                try:
-                    res = _llm.invoke(prompt)
-                    cypher_query = res.content.strip()
-                    cypher_query = re.sub(r"^```(?:cypher|neo4j)?\n|```$", "", cypher_query, flags=re.MULTILINE).strip()
-                except Exception as e:
-                    logger.error(f"LLM translation to Cypher failed: {e}")
+        # 1. Introspect schema from live Neo4j database
+        try:
+            rel_res = run_query("CALL db.relationshipTypes()")
+            rels = [list(r.values())[0] for r in rel_res if r]
+            schema_str = (
+                "Neo4j Schema and Properties:\n"
+                "- Node 'Airport' properties: code, name, city\n"
+                "- Node 'Airline' properties: code, name, alliance\n"
+                "- Node 'Passenger' properties: id, name, tier, policy_id\n"
+                "- Node 'CorporatePolicy' properties: id, name, allowed_cabins, allowed_fare_classes, max_fare_inr, min_advance_days, preferred_airlines, requires_approval_above_inr\n"
+                "- Node 'Waiver' properties: id, type, description, valid_until, origin_codes, fee_waived, discount_pct\n"
+                "- Node 'Booking' properties: pnr, passenger_name, flight_number, origin, destination, date, fare_class, price_inr\n"
+                "- Node 'PolicyDocument' properties: name\n"
+                "- Node 'PolicySection' properties: id, title, document\n"
+                "- Node 'PolicyRule' properties: id, snippet, page, chunk_index, max_fare_inr, min_advance_days, requires_approval, allowed_cabins, allowed_fare_classes, document\n"
+                "- Node 'EmployeeTier' properties: id, name\n"
+                f"- Relationship Types: {', '.join(rels)}"
+            )
+        except Exception as schema_err:
+            logger.error(f"Failed to fetch live schema: {schema_err}")
+            schema_str = (
+                "Node Labels: Airport, Airline, CorporatePolicy, Passenger, Waiver, PolicyDocument, PolicySection, PolicyRule. "
+                "Relationship Types: ROUTE, HAS_POLICY, HAS_WAIVER, HAS_SECTION, CONTAINS_RULE, GOVERNS_POLICY, PERMITS_FARE_CLASS."
+            )
+
+        # 2. Call the new Gemma model to generate Cypher query
+        try:
+            from cypher_generator import generate_cypher
+            cypher_query = generate_cypher(body.question, schema_str)
+        except Exception as hf_err:
+            logger.error(f"Gemma Cypher generation failed: {hf_err}")
+            cypher_query = ""
         
         # Rule-based fallback if LLM is unavailable or translation was empty
         if not cypher_query:
             q = body.question.lower()
-            if "policy" in q or "cp-" in q:
-                cypher_query = "MATCH (p:CorporatePolicy) RETURN p LIMIT 5"
-            elif "waiver" in q:
-                cypher_query = "MATCH (w:Waiver) RETURN w LIMIT 5"
-            elif "passenger" in q:
-                cypher_query = "MATCH (p:Passenger)-[r:HAS_POLICY]->(pol) RETURN p, r, pol"
+            section_match = re.search(r"sec(?:tion)?\s*(\d+(?:\.\d+)?)", q)
+            if section_match:
+                sec_num = section_match.group(1)
+                cypher_query = (
+                    f"MATCH (s:PolicySection) "
+                    f"WHERE s.title STARTS WITH '{sec_num}' "
+                    f"OPTIONAL MATCH (s)-[:HAS_RULE]->(r:PolicyRule) "
+                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 5"
+                )
             else:
-                cypher_query = "MATCH (n) RETURN n LIMIT 10"
+                stopwords = {"what", "is", "the", "rule", "for", "explain", "about", "policy", "document", "in", "on", "of", "and", "to", "a", "from", "any", "kind", "must", "show", "get"}
+                words = [w.strip() for w in re.split(r'\W+', q) if w.strip() and w.strip() not in stopwords]
                 
-        logger.info(f"Generated Cypher query: {cypher_query}")
+                if "waiver" in q or "weather" in q or "monsoon" in q or "smog" in q:
+                    cypher_query = "MATCH (w:Waiver) RETURN w LIMIT 5"
+                elif "passenger" in q or "who is" in q or "grade" in q:
+                    cypher_query = "MATCH (p:Passenger)-[r:HAS_POLICY]->(pol) RETURN p, r, pol"
+                elif words:
+                    conditions = []
+                    for w in words[:4]:
+                        conditions.append(f"toLower(s.title) CONTAINS '{w}'")
+                        conditions.append(f"toLower(s.snippet) CONTAINS '{w}'")
+                    cypher_query = (
+                        "MATCH (s) "
+                        f"WHERE {' OR '.join(conditions)} "
+                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 5"
+                    )
+                else:
+                    cypher_query = "MATCH (n) RETURN n LIMIT 10"
+                
         results = run_query(cypher_query)
+        
+        # Dual-layer safety: if the generated query returns 0 records, use our keyword-based database search
+        if not results:
+            q = body.question.lower()
+            fallback_query = ""
+            section_match = re.search(r"sec(?:tion)?\s*(\d+(?:\.\d+)?)", q)
+            if section_match:
+                sec_num = section_match.group(1)
+                fallback_query = (
+                    f"MATCH (s:PolicySection) "
+                    f"WHERE s.title STARTS WITH '{sec_num}' "
+                    f"OPTIONAL MATCH (s)-[:HAS_RULE]->(r:PolicyRule) "
+                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 5"
+                )
+            else:
+                stopwords = {"what", "is", "the", "rule", "for", "explain", "about", "policy", "document", "in", "on", "of", "and", "to", "a", "from", "any", "kind", "must", "show", "get"}
+                words = [w.strip() for w in re.split(r'\W+', q) if w.strip() and w.strip() not in stopwords]
+                if words:
+                    conditions = []
+                    for w in words[:4]:
+                        conditions.append(f"toLower(s.title) CONTAINS '{w}'")
+                        conditions.append(f"toLower(s.snippet) CONTAINS '{w}'")
+                    fallback_query = (
+                        "MATCH (s) "
+                        f"WHERE {' OR '.join(conditions)} "
+                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 5"
+                    )
+            if fallback_query:
+                logger.info(f"LLM query returned 0 records. Activating fallback query lookup: {fallback_query}")
+                cypher_query = fallback_query
+                results = run_query(cypher_query)
         
         # 2. Synthesize answer using LLM
         summary_prompt = (
@@ -527,13 +562,36 @@ def api_run_nl_query(body: NLQueryRequest):
             except Exception as e:
                 logger.error(f"Gemini synthesis failed: {e}")
         else:
-            from agent.booking_agent import _llm
-            if _llm:
+            api_key = os.getenv("HUGGINGFACE_API_KEY")
+            if api_key:
                 try:
-                    ans_res = _llm.invoke(summary_prompt)
-                    answer = ans_res.content.strip()
+                    from openai import OpenAI
+                    logger.info("Synthesizing natural response using Qwen/Qwen2.5-7B-Instruct...")
+                    client = OpenAI(
+                        base_url="https://router.huggingface.co/v1",
+                        api_key=api_key
+                    )
+                    completion = client.chat.completions.create(
+                        model="Qwen/Qwen2.5-7B-Instruct",
+                        messages=[
+                            {"role": "user", "content": summary_prompt}
+                        ],
+                        max_tokens=400,
+                        temperature=0.3
+                    )
+                    answer = completion.choices[0].message.content.strip()
                 except Exception as e:
-                    logger.error(f"LLM synthesis failed: {e}")
+                    logger.error(f"Qwen synthesis failed: {e}")
+            
+            if not answer:
+                from agent.booking_agent import _llm
+                if _llm:
+                    try:
+                        logger.info("Qwen failed or not available. Falling back to default Llama model...")
+                        ans_res = _llm.invoke(summary_prompt)
+                        answer = ans_res.content.strip()
+                    except Exception as e:
+                        logger.error(f"Fallback LLM synthesis failed: {e}")
                 
         if not answer:
             answer = f"Found {len(results)} records matching your query."

@@ -79,16 +79,6 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
           🤖 Booking Agent
         </button>
         <button
-          onClick={() => setActiveTab('forecasting')}
-          className={`flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all duration-300 ${
-            activeTab === 'forecasting'
-              ? 'bg-surface-raised text-accent shadow-sm'
-              : 'text-text-secondary hover:text-text-primary'
-          }`}
-        >
-          📈 Route Forecasts
-        </button>
-        <button
           onClick={() => setActiveTab('policy')}
           className={`flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all duration-300 ${
             activeTab === 'policy'
@@ -126,21 +116,6 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
               className="bg-accent text-white px-4 py-2 text-xs font-bold rounded-lg hover:bg-accent-text transition-all duration-200 shadow-sm"
             >
               New Booking Session
-            </button>
-          ) : activeTab === 'forecasting' ? (
-            <button
-              onClick={handleRefreshClick}
-              disabled={isRefreshing}
-              className="bg-success text-white px-4 py-2 text-xs font-bold rounded-lg hover:bg-success/90 disabled:opacity-50 transition-all duration-200 shadow-sm flex items-center gap-1.5"
-            >
-              {isRefreshing ? (
-                <>
-                  <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                  Refreshing...
-                </>
-              ) : (
-                'Sync Forecast Data'
-              )}
             </button>
           ) : (
             <button

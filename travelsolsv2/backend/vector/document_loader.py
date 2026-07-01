@@ -98,58 +98,40 @@ def load_documents():
     import zipfile
     import xml.etree.ElementTree as ET
     
-    docx_path = "../../enhanced_synthetic_company_travel_policy_25_pages.docx"
-    if not os.path.exists(docx_path):
-        docx_path = "../enhanced_synthetic_company_travel_policy_25_pages.docx"
-    if not os.path.exists(docx_path):
-        docx_path = "enhanced_synthetic_company_travel_policy_25_pages.docx"
+    pdf_path = "../../corporate_travel_policy.pdf"
+    if not os.path.exists(pdf_path):
+        pdf_path = "../corporate_travel_policy.pdf"
+    if not os.path.exists(pdf_path):
+        pdf_path = "corporate_travel_policy.pdf"
 
-        
-    if os.path.exists(docx_path):
-        logger.info(f"Seeding corporate_policies from custom company guidelines: {docx_path}")
+    if os.path.exists(pdf_path):
+        logger.info(f"Seeding corporate_policies from custom PDF guidelines: {pdf_path}")
         try:
-            paragraphs = []
-            with zipfile.ZipFile(docx_path) as z:
-                xml_content = z.read('word/document.xml')
-                root = ET.fromstring(xml_content)
-                namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-                for p in root.findall('.//w:p', namespaces):
-                    text_elems = p.findall('.//w:t', namespaces)
-                    text = "".join([t.text for t in text_elems if t.text])
-                    if text.strip():
-                        paragraphs.append(text.strip())
-            
-            # Chunk the paragraphs
+            import pypdf
+            reader = pypdf.PdfReader(pdf_path)
             chunks = []
-            current_chunk = []
-            current_len = 0
-            for p in paragraphs:
-                current_chunk.append(p)
-                current_len += len(p)
-                if current_len > 1500:
-                    chunks.append("\n\n".join(current_chunk))
-                    current_chunk = []
-                    current_len = 0
-            if current_chunk:
-                chunks.append("\n\n".join(current_chunk))
-                
-            logger.info(f"Extracted {len(chunks)} document chunks from travel policy docx.")
+            for idx, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text and page_text.strip():
+                    chunks.append(page_text.strip())
             
-            # Reset collection and seed docx chunks
+            logger.info(f"Extracted {len(chunks)} pages from travel policy PDF.")
+            
+            # Reset collection and seed PDF chunks
             chroma.delete_collection("corporate_policies")
             corp_policies_col = chroma.get_or_create_collection("corporate_policies")
             
-            policy_ids = [f"POLICY_DOCX_{i}" for i in range(len(chunks))]
-            policy_metas = [{"policy_id": "CP-ALL", "type": "docx_policy", "chunk_index": i} for i in range(len(chunks))]
+            policy_ids = [f"POLICY_PDF_{i}" for i in range(len(chunks))]
+            policy_metas = [{"policy_id": "CP-ALL", "type": "pdf_policy", "page_index": i} for i in range(len(chunks))]
             
             chroma.add_documents("corporate_policies", chunks, policy_ids, policy_metas)
-            logger.info("Successfully loaded and indexed DOCX company guidelines into ChromaDB!")
+            logger.info("Successfully loaded and indexed PDF company guidelines into ChromaDB!")
             
         except Exception as e:
-            logger.error(f"Failed to seed corporate policies from docx: {e}. Falling back to default policies.")
+            logger.error(f"Failed to seed corporate policies from PDF: {e}. Falling back to default policies.")
             _seed_default_policies(chroma, corp_policies_col)
     else:
-        logger.info("Guidelines DOCX not found. Seeding default corporate policies.")
+        logger.info("Guidelines PDF not found. Seeding default corporate policies.")
         _seed_default_policies(chroma, corp_policies_col)
 
     # ------------------ 3. Seeding irops_history collection ------------------

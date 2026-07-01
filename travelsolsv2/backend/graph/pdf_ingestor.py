@@ -194,7 +194,7 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
         # Create a PolicyRule node for each chunk that has substantive content
         if len(chunk["text"]) > 80:
             rule_id = f"RULE-{chunk['id']}"
-            snippet = chunk["text"][:300].replace("\n", " ").strip()
+            snippet = chunk["text"].replace("\n", " ").strip()
 
             # Compute max fare cap from the chunk
             max_fare = max(ents["amounts_inr"]) if ents["amounts_inr"] else None
@@ -232,15 +232,19 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
                 }
             )
 
-            # Link rule → PolicySection if there's an active section context
-            if current_section_id:
+            # Link rule → PolicySection(s) detected in this chunk
+            chunk_section_ids = [f"SEC-{re.sub(r'[^A-Z0-9]', '', title.upper())[:30]}" for title in ents["sections"]]
+            if not chunk_section_ids and current_section_id:
+                chunk_section_ids = [current_section_id]
+                
+            for sec_id in chunk_section_ids:
                 run_query(
                     """
                     MATCH (s:PolicySection {id: $sec_id})
                     MATCH (r:PolicyRule {id: $rule_id})
                     MERGE (s)-[:HAS_RULE]->(r)
                     """,
-                    {"sec_id": current_section_id, "rule_id": rule_id}
+                    {"sec_id": sec_id, "rule_id": rule_id}
                 )
 
             # Link rule → CorporatePolicy nodes (if IDs found in chunk)

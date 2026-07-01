@@ -438,11 +438,11 @@ def retrieve_context(query: str, passenger_name: str = None) -> dict:
                 )
                 for row in pdf_rules:
                     fact = f"[PDF: {row.get('doc')}] Policy rule: {row.get('snippet', '')[:200]}"
-                    if row.get('max_fare_inr'):
-                        fact += f" | Max Fare: INR {row['max_fare_inr']:,}"
-                    if row.get('min_advance_days') is not None:
-                        fact += f" | Min Advance: {row['min_advance_days']} days"
-                    if row.get('requires_approval'):
+                    if row.get('max_fare'):
+                        fact += f" | Max Fare: INR {row['max_fare']:,}"
+                    if row.get('advance') is not None:
+                        fact += f" | Min Advance: {row['advance']} days"
+                    if row.get('approval'):
                         fact += " | Requires Approval: Yes"
                     graph_facts.append(fact)
         except Exception as e:

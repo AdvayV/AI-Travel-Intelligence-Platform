@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import TopBar from './components/TopBar';
 import useAgent from './hooks/useAgent';
 import BookingDashboard from './pages/BookingDashboard';
-import ForecastDashboard from './pages/ForecastDashboard';
 import PolicyGraphPage from './pages/PolicyGraphPage';
 
 export default function App() {
@@ -21,8 +20,6 @@ export default function App() {
       {/* Dynamic Main Workspace Rendering */}
       {activeTab === 'booking' ? (
         <BookingDashboard {...agentProps} />
-      ) : activeTab === 'forecasting' ? (
-        <ForecastDashboard />
       ) : (
         <PolicyGraphPage />
       )}

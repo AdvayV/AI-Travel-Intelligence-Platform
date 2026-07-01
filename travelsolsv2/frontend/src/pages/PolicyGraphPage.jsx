@@ -523,7 +523,7 @@ export default function PolicyGraphPage() {
                 <div className="text-white leading-relaxed font-sans text-sm bg-slate-800/50 p-3 rounded border border-slate-700/50 shadow-inner">
                   {queryAnswer.split('\n').map((line, idx) => (
                     <div key={idx} className={line.trim().startsWith('-') || line.trim().startsWith('*') ? 'ml-4 mb-1 text-slate-300' : 'mb-2 text-slate-200'}>
-                      {line}
+                      {line.replace(/\*\*/g, '').replace(/\*/g, '')}
                     </div>
                   ))}
                 </div>

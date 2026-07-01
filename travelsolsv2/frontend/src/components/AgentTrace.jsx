@@ -153,7 +153,7 @@ export default function AgentTrace({ steps, isLoading }) {
                       {isConclusion ? 'Response Content:' : 'Tool Output:'}
                     </span>
                     <p className={`whitespace-pre-line text-text-primary ${isConclusion ? 'text-sm font-medium' : ''}`}>
-                      {step.tool_output}
+                      {step.tool_output.replace(/\*\*/g, '').replace(/\*/g, '')}
                     </p>
                   </div>
                 </div>

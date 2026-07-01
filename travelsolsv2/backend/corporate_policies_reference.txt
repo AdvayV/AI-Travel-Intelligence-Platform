@@ -1,0 +1,91 @@
+================================================================================
+CORPORATE TRAVEL POLICIES & COMPLIANCE REFERENCE SHEET
+================================================================================
+Use this document to validate the autonomous booking agent's audit outputs.
+
+--------------------------------------------------------------------------------
+1. STRUCTURED CORPORATE POLICIES (Seeded in Neo4j Graph DB)
+--------------------------------------------------------------------------------
+
+[CP-001] Standard Travel Policy
+- ID: CP-001
+- Name: Standard Travel Policy
+- Grade Assignment: Standard Employees (Bands 1-5)
+- Allowed Cabins: ECONOMY Only
+- Allowed Fare Classes: Y, M, K, Q
+- Lead Time Rule: Must book at least 7 days in advance
+- Maximum Fare Limit: INR 150,000
+- Pre-Approval Threshold: Required for any ticket above INR 100,000
+- Preferred Airlines: Air India (AI), IndiGo (6E)
+
+[CP-002] Senior Management Travel Policy
+- ID: CP-002
+- Name: Senior Management Travel Policy
+- Grade Assignment: Senior Management (Bands 6-8)
+- Allowed Cabins: ECONOMY, BUSINESS
+- Allowed Fare Classes: Y, M, K, J, C, D
+- Lead Time Rule: Must book at least 3 days in advance
+- Maximum Fare Limit: INR 500,000
+- Pre-Approval Threshold: Required for any ticket above INR 400,000
+- Preferred Airlines: Air India (AI), Emirates (EK), Qatar Airways (QR)
+
+[CP-003] Executive Grade Policy
+- ID: CP-003
+- Name: Executive Grade Policy
+- Grade Assignment: Executive Officers (Band 9)
+- Allowed Cabins: ECONOMY, BUSINESS, FIRST
+- Allowed Fare Classes: Y, M, K, Q, J, C, D, G
+- Lead Time Rule: 0 days advance required (Same-day booking allowed)
+- Maximum Fare Limit: Unlimited (No maximum fare cap)
+- Pre-Approval Threshold: No approval threshold (automatic credit card clearing)
+- Preferred Airlines: Air India (AI), Emirates (EK), Qatar Airways (QR), Singapore Airlines (SQ), British Airways (BA), IndiGo (6E)
+
+
+--------------------------------------------------------------------------------
+2. UNSTRUCTURED POLICY CLAUSES (Seeded in ChromaDB Vector Database)
+--------------------------------------------------------------------------------
+
+[CP-004] Monsoon & Severe Weather Disruption Exceptions
+- Description: In the event of severe weather warnings (such as the annual Indian Monsoon in Mumbai/BOM or winter smog in Delhi/DEL), travelers departing from affected airports are granted automatic exemptions from advance booking windows. When an active airline waiver (e.g., WX-2026-INDIA) is declared, the booking lead time requirement is reduced to 2 days, and upgrades to full economy (Class Y) are authorized to ensure business continuity without penalty fees.
+
+[CP-005] Expense Authorization & Limits
+- Description: Domestic travel expense claims are capped at INR 8,000 per day covering meals and local taxi fares. International daily allowance is capped at USD 150. Any single transaction exceeding INR 100,000 (excluding standard economy flight tickets) requires explicit Department Head pre-approval before corporate credit cards are charged.
+
+[CP-006] Authorized Booking Channels
+- Description: All corporate travel (flights, hotels, car rentals) must be booked exclusively through the corporate GDS tool or authorized corporate travel agents. Direct bookings on public consumer travel sites are strictly non-reimbursable unless the booking was made under emergency circumstances during GDS system down-times.
+
+
+--------------------------------------------------------------------------------
+3. PASSENGER-TO-POLICY ASSIGNMENTS (For Cross-Reference)
+--------------------------------------------------------------------------------
+
+- Passenger Name: Aryan Mehta
+  * Pass ID: PASS-001
+  * Corporate Grade: Gold (Band 7)
+  * Default Policy ID: CP-001
+  * Flight Cabin Privilege: Business allowed on long-haul routes (e.g., LHR, JFK), Economy on short-haul (e.g., DXB).
+
+- Passenger Name: Priya Sharma
+  * Pass ID: PASS-002
+  * Corporate Grade: Silver (Band 4)
+  * Default Policy ID: CP-001
+  * Flight Cabin Privilege: Economy class only.
+
+- Passenger Name: Rajesh Kumar
+  * Pass ID: PASS-003
+  * Corporate Grade: Platinum (Band 8)
+  * Default Policy ID: CP-002
+  * Flight Cabin Privilege: Economy or Business class on all routes.
+
+- Passenger Name: Anita Singh
+  * Pass ID: PASS-004
+  * Corporate Grade: Standard (Band 3)
+  * Default Policy ID: CP-001
+  * Flight Cabin Privilege: Economy class only.
+
+- Passenger Name: Vikram Nair
+  * Pass ID: PASS-005
+  * Corporate Grade: Executive (Band 9)
+  * Default Policy ID: CP-003
+  * Flight Cabin Privilege: Economy, Business, or First class on all routes.
+================================================================================
