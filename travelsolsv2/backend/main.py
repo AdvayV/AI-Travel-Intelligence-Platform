@@ -476,14 +476,14 @@ def api_run_nl_query(body: NLQueryRequest):
                     f"MATCH (s:PolicySection) "
                     f"WHERE s.title STARTS WITH '{sec_num}' "
                     f"OPTIONAL MATCH (s)-[:HAS_RULE]->(r:PolicyRule) "
-                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 5"
+                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 15"
                 )
             else:
                 stopwords = {"what", "is", "the", "rule", "for", "explain", "about", "policy", "document", "in", "on", "of", "and", "to", "a", "from", "any", "kind", "must", "show", "get"}
                 words = [w.strip() for w in re.split(r'\W+', q) if w.strip() and w.strip() not in stopwords]
                 
                 if "waiver" in q or "weather" in q or "monsoon" in q or "smog" in q:
-                    cypher_query = "MATCH (w:Waiver) RETURN w LIMIT 5"
+                    cypher_query = "MATCH (w:Waiver) RETURN w LIMIT 15"
                 elif "passenger" in q or "who is" in q or "grade" in q:
                     cypher_query = "MATCH (p:Passenger)-[r:HAS_POLICY]->(pol) RETURN p, r, pol"
                 elif words:
@@ -494,7 +494,7 @@ def api_run_nl_query(body: NLQueryRequest):
                     cypher_query = (
                         "MATCH (s) "
                         f"WHERE {' OR '.join(conditions)} "
-                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 5"
+                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 15"
                     )
                 else:
                     cypher_query = "MATCH (n) RETURN n LIMIT 10"
@@ -512,7 +512,7 @@ def api_run_nl_query(body: NLQueryRequest):
                     f"MATCH (s:PolicySection) "
                     f"WHERE s.title STARTS WITH '{sec_num}' "
                     f"OPTIONAL MATCH (s)-[:HAS_RULE]->(r:PolicyRule) "
-                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 5"
+                    f"RETURN s.title AS SectionTitle, COALESCE(r.snippet, s.title) AS PolicySnippet, COALESCE(r.page, 0) AS PageNumber LIMIT 15"
                 )
             else:
                 stopwords = {"what", "is", "the", "rule", "for", "explain", "about", "policy", "document", "in", "on", "of", "and", "to", "a", "from", "any", "kind", "must", "show", "get"}
@@ -525,7 +525,7 @@ def api_run_nl_query(body: NLQueryRequest):
                     fallback_query = (
                         "MATCH (s) "
                         f"WHERE {' OR '.join(conditions)} "
-                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 5"
+                        "RETURN s.title AS SectionTitle, s.snippet AS PolicySnippet, s.page AS PageNumber LIMIT 15"
                     )
             if fallback_query:
                 logger.info(f"LLM query returned 0 records. Activating fallback query lookup: {fallback_query}")

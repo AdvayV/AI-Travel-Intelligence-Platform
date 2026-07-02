@@ -136,6 +136,11 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                     {fare_class}
                   </span>
                 </div>
+                {selectedFlight.weather && (
+                  <div className="text-[11px] text-text-secondary bg-surface/50 px-2.5 py-1.5 border border-border/40 rounded max-w-lg shadow-sm mt-3">
+                    <span className="font-bold text-accent">☁️ Destination Weather:</span> {selectedFlight.weather}
+                  </div>
+                )}
               </div>
               {/* Waiver banner */}
               {hasWaiverException && (

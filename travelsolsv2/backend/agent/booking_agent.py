@@ -10,17 +10,48 @@ from agent.tools import ALL_TOOLS
 def parse_prompt_date(query: str, current_date_str: str = "2026-06-25") -> str:
     query_lower = query.lower()
     
-    # 1. Look for absolute date YYYY-MM-DD
-    date_match = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", query)
+    # 1. Look for absolute date YYYY-MM-DD or YYYY/MM/DD
+    date_match = re.search(r"\b(\d{4})[-/](\d{2})[-/](\d{2})\b", query)
     if date_match:
-        return date_match.group(0)
+        y, m, d = date_match.group(1), date_match.group(2), date_match.group(3)
+        return f"{y}-{m}-{d}"
         
+    # 2. Look for DD-MM-YYYY or DD/MM/YYYY
+    date_match_reverse = re.search(r"\b(\d{2})[-/](\d{2})[-/](\d{4})\b", query)
+    if date_match_reverse:
+        d, m, y = date_match_reverse.group(1), date_match_reverse.group(2), date_match_reverse.group(3)
+        return f"{y}-{m}-{d}"
+        
+    # 3. Look for named month patterns like "June 25, 2026" or "25 June 2026" or "25th June 2026"
+    months = {
+        "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+        "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+        "january": "01", "february": "02", "march": "03", "april": "04", "june": "06",
+        "july": "07", "august": "08", "september": "09", "october": "10", "november": "11", "december": "12"
+    }
+    
+    for month_name, m_num in months.items():
+        pat1 = rf"\b(\d{1,2})(?:st|nd|rd|th)?\s+{month_name}\s+(\d{4})\b"
+        pat2 = rf"\b{month_name}\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(\d{4})\b"
+        
+        m1 = re.search(pat1, query_lower)
+        if m1:
+            d_val = m1.group(1).zfill(2)
+            y_val = m1.group(2)
+            return f"{y_val}-{m_num}-{d_val}"
+            
+        m2 = re.search(pat2, query_lower)
+        if m2:
+            d_val = m2.group(1).zfill(2)
+            y_val = m2.group(2)
+            return f"{y_val}-{m_num}-{d_val}"
+            
     try:
         base_date = datetime.strptime(current_date_str, "%Y-%m-%d").date()
     except:
         base_date = date(2026, 6, 25)
         
-    # 2. Check relative terms
+    # 4. Check relative terms
     if "today" in query_lower:
         return base_date.strftime("%Y-%m-%d")
     elif "tomorrow" in query_lower:
@@ -30,7 +61,7 @@ def parse_prompt_date(query: str, current_date_str: str = "2026-06-25") -> str:
     elif "next week" in query_lower:
         return (base_date + timedelta(days=7)).strftime("%Y-%m-%d")
         
-    # 3. Check for "in X days"
+    # 5. Check for "in X days"
     days_match = re.search(r"\bin\s+(\d+)\s+days\b", query_lower)
     if days_match:
         days = int(days_match.group(1))

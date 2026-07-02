@@ -175,11 +175,30 @@ def check_active_waivers_tool(input_str: str) -> str:
         return f"ERROR: Failed to retrieve waivers: {e}"
 
 # --- Tool 4: get_weather_risk ---
+# --- Tool 4: get_weather_risk ---
 def get_weather_risk_tool(input_str: str) -> str:
     args = parse_args(input_str)
     if not args:
         return "ERROR: get_weather_risk requires airport code. Example: BOM"
     airport = args[0].upper().strip()
+    
+    # Parse target date if provided
+    target_date = None
+    day_offset = 0
+    if len(args) > 1 and args[1]:
+        target_date_str = str(args[1]).strip()
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y"):
+            try:
+                target_date = datetime.strptime(target_date_str, fmt).date()
+                break
+            except ValueError:
+                continue
+                
+        if target_date:
+            today = date.today()
+            delta = (target_date - today).days
+            if 0 <= delta < 16:
+                day_offset = delta
     
     if airport not in AIRPORT_COORDS:
         return f"Airport code {airport} coordinates not found in system coords database. Assuming LOW weather risk."
@@ -214,7 +233,6 @@ def get_weather_risk_tool(input_str: str) -> str:
                 points += 1.0
             elif 50 <= wc <= 69:
                 points += 0.3
-            # heavy snow/storm gives 0
             
             if tmax is not None:
                 if 18 <= tmax <= 30:
@@ -225,7 +243,6 @@ def get_weather_risk_tool(input_str: str) -> str:
         max_points = days * 1.5
         score = max(0.0, min(1.0, points / max_points))
         
-        # Invert score to get weather risk: High score = Good weather = Low risk
         if score >= 0.8:
             risk = "LOW weather risk"
         elif score >= 0.5:
@@ -233,7 +250,24 @@ def get_weather_risk_tool(input_str: str) -> str:
         else:
             risk = "HIGH weather risk (Severe weather patterns, potential monsoon or schedule disruptions forecasted)"
             
-        return f"Weather report for {airport}: Risk Level: {risk} (Stability Score: {round(score * 100)}%). Forecasted conditions: Daily temperatures maxing around {temp_maxes[0]}C, general weather code {weathercodes[0]}."
+        # Translate WMO weather code to English description
+        wmo_codes = {
+            0: "Clear sky ☀️",
+            1: "Mainly clear 🌤", 2: "Partly cloudy ⛅", 3: "Overcast ☁️",
+            45: "Foggy 🌫", 48: "Foggy 🌫",
+            51: "Light drizzle 🌧", 53: "Moderate drizzle 🌧", 55: "Dense drizzle 🌧",
+            61: "Slight rain 🌧", 63: "Moderate rain 🌧", 65: "Heavy rain 🌧",
+            71: "Slight snow 🌨", 73: "Moderate snow 🌨", 75: "Heavy snow 🌨",
+            80: "Slight rain showers 🌦", 81: "Moderate rain showers 🌦", 82: "Violent rain showers 🌦",
+            95: "Thunderstorm ⛈", 96: "Thunderstorm ⛈", 99: "Thunderstorm ⛈"
+        }
+        
+        wc_val = weathercodes[day_offset] if day_offset < len(weathercodes) else 0
+        tmax_val = temp_maxes[day_offset] if day_offset < len(temp_maxes) else 25.0
+        weather_desc = wmo_codes.get(wc_val, "Fair weather")
+        
+        date_label = f"on {target_date}" if target_date else "today"
+        return f"Weather report for {airport} {date_label}: Risk Level: {risk} (Stability Score: {round(score * 100)}%). Forecasted conditions: Temperature: {tmax_val}°C, condition: {weather_desc}."
     except Exception as e:
         logger.warning(f"Weather API failed for {airport}: {e}")
         return f"Weather API check failed for {airport} due to network timeout. Returning default: MODERATE weather risk (Safety warning: weather conditions should be checked manually before flight confirmation)."
