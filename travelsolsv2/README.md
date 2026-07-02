@@ -132,3 +132,14 @@ TravelRoute v2 features an advanced, bulletproof fallback system designed to ens
 * **ChromaDB & Hugging Face Model Fallback**: If ChromaDB files are locked, or if the Hugging Face Hub is down (preventing the SentenceTransformers `all-MiniLM-L6-v2` embedding model from being downloaded on first run), ChromaClient falls back to a high-fidelity, local, in-memory **Keyword-Overlap Vector Store**.
 * **LLM Fallback**: If the Hugging Face Inference API is down, rate-limited, or unauthorized, the agent executor intercepts the failure and falls back to a mock deterministic execution loop (`run_mock_agent`), preserving full system functionality.
 
+---
+
+## 5. Policy Graph NL Console & AI Integration (Qwen 2.5)
+
+To translate natural language questions directly into Neo4j Cypher and synthesize conversational answers:
+* **Cypher Translation Model:** Uses **`Qwen/Qwen2.5-Coder-7B-Instruct`** via the HuggingFace Router. The engine fetches live Neo4j database schemas (labels, relationships, and property configurations) and constructs a system prompt to return raw Cypher code.
+* **Response Synthesis Model:** Uses **`Qwen/Qwen2.5-7B-Instruct`** to convert structured Neo4j records into natural, friendly conversational summary paragraphs in the UI.
+* **Dual-Layer Fallback Recovery:** If the model API call fails, or if the generated query runs successfully but returns **zero records** (e.g. from querying a wrong property), the backend automatically runs a fallback keyword extractor (e.g., matching terms like `car`, `rental`, `insurance`, `meals`, or regex patterns like `section 8.3`) to run wildcard containment queries against Neo4j.
+* **PDF Ingestion System:** Uses a local `pypdf`-based loader to ingest and index the 18 pages of `corporate_travel_policy.pdf` into ChromaDB and AuraDB, preserving full unabridged text chunks and mapping many-to-one connections between multiple section headings on a page and its rules.
+
+

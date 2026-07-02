@@ -78,7 +78,7 @@ export default function QueryInput({ onSubmit, isLoading }) {
         <div className="flex items-center justify-between border-t border-border pt-4 mt-2">
           {/* Badge */}
           <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border border-accent text-accent">
-            GraphRAG + MCP
+            GraphRAG
           </div>
 
           {/* Submit Button */}

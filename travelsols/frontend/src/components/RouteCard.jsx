@@ -10,7 +10,6 @@ const TIER_LEFT_BORDER = {
 };
 
 function RouteCard({ route, isSelected, onClick }) {
-  const isRising = route.momentum_pct > 0;
   const isDiscount = route.surge_multiplier < 1.0;
   const tierBorder = TIER_LEFT_BORDER[route.tier] || '#1E2D4A';
 
@@ -69,7 +68,7 @@ function RouteCard({ route, isSelected, onClick }) {
         {route.dest_city_name}
       </div>
 
-      {/* Row 3: weather + momentum */}
+      {/* Row 3: weather */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div style={{ color: '#4CAF50', fontSize: '12px' }}>
           {route.weather_label || ''}
@@ -78,9 +77,6 @@ function RouteCard({ route, isSelected, onClick }) {
               📈 {Math.round(route.trend_score * 100)}% interest
             </span>
           )}
-        </div>
-        <div style={{ color: isRising ? '#4CAF50' : '#FF9B00', fontSize: '12px', fontWeight: 'bold' }}>
-          {isRising ? '↑' : '↓'} {route.momentum_pct > 0 ? '+' : ''}{route.momentum_pct}% demand
         </div>
       </div>
 
