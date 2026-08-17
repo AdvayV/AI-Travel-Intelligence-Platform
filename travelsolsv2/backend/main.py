@@ -5,8 +5,10 @@ from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from tls_config import enable_system_trust_store
 
 load_dotenv()
+enable_system_trust_store()
 
 # Setup logging FIRST before any package imports that might log
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

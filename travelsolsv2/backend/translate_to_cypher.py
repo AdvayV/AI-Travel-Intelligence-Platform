@@ -1,10 +1,12 @@
 import os
 import sys
-from openai import OpenAI
 from dotenv import load_dotenv
+from tls_config import enable_system_trust_store
+from openai import OpenAI
 
 # Load credentials from .env
 load_dotenv()
+enable_system_trust_store()
 
 def translate_to_cypher(natural_query: str) -> str:
     """
@@ -47,9 +49,9 @@ def translate_to_cypher(natural_query: str) -> str:
             timeout=10.0
         )
         
-        # Meta-Llama-3-8B-Instruct is excellent at structured queries
+        # Coder-tuned Qwen is available on the Hugging Face Router and suited to Cypher generation.
         completion = client.chat.completions.create(
-            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            model="Qwen/Qwen2.5-Coder-7B-Instruct",
             messages=[
                 {"role": "system", "content": schema_context},
                 {"role": "user", "content": f"Translate: {natural_query}"}

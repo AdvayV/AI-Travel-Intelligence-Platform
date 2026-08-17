@@ -1,8 +1,10 @@
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
+from tls_config import enable_system_trust_store
+from openai import OpenAI
 
 load_dotenv()
+enable_system_trust_store()
 
 def generate_cypher(question: str, schema: str) -> str:
     """

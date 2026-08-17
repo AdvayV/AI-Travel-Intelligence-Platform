@@ -4,6 +4,7 @@ import random
 import logging
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
+from tls_config import enable_system_trust_store
 from agent.graph_rag import retrieve_context
 from agent.tools import ALL_TOOLS
 
@@ -70,6 +71,7 @@ def parse_prompt_date(query: str, current_date_str: str = "2026-06-25") -> str:
     return current_date_str
 
 load_dotenv()
+enable_system_trust_store()
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
@@ -90,11 +92,11 @@ except ImportError:
 _llm = None
 if LANGCHAIN_AVAILABLE and HUGGINGFACE_API_KEY and HUGGINGFACE_API_KEY != "your_huggingface_api_key_here":
     try:
-        logger.info("Initializing HuggingFace Llama-3-8B-Instruct via OpenAI-compatible router...")
+        logger.info("Initializing Hugging Face Qwen2.5-7B-Instruct via OpenAI-compatible router...")
         _llm = ChatOpenAI(
             base_url="https://router.huggingface.co/v1",
             api_key=HUGGINGFACE_API_KEY,
-            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            model="Qwen/Qwen2.5-7B-Instruct",
             max_tokens=600,
             temperature=0.1,
             timeout=20

@@ -9,6 +9,7 @@ langchain-community
 sentence-transformers
 httpx
 python-dotenv
+truststore
 pydantic
 torch
 apscheduler
@@ -17,4 +18,3 @@ pandas
 numpy
 git+https://github.com/amazon-science/chronos-forecasting.git
 pypdf
-

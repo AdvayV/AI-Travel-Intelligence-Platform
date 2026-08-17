@@ -1,7 +1,8 @@
 import os
 import logging
+import time
 from datetime import date
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 try:
     from neo4j import GraphDatabase
     NEO4J_AVAILABLE = True
@@ -21,15 +22,32 @@ logger = logging.getLogger(__name__)
 # Active driver instance
 _driver = None
 _use_mock = False
+_last_connection_failure = 0.0
+_RETRY_INTERVAL_SECONDS = 30
+
+
+def _refresh_credentials():
+    """Reload local Neo4j credentials so a recovered service can reconnect."""
+    global NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    values = dotenv_values(env_path)
+    NEO4J_URI = values.get("NEO4J_URI") or os.getenv("NEO4J_URI")
+    NEO4J_USERNAME = values.get("NEO4J_USERNAME") or os.getenv("NEO4J_USERNAME", "neo4j")
+    NEO4J_PASSWORD = values.get("NEO4J_PASSWORD") or os.getenv("NEO4J_PASSWORD")
 
 def get_driver():
-    global _driver, _use_mock
+    global _driver, _use_mock, _last_connection_failure
     if not NEO4J_AVAILABLE:
         _use_mock = True
         return None
         
     if _use_mock:
-        return None
+        elapsed = time.monotonic() - _last_connection_failure
+        if elapsed < _RETRY_INTERVAL_SECONDS:
+            return None
+        logger.info("Retrying Neo4j connection after mock-mode fallback.")
+        _use_mock = False
+        _refresh_credentials()
         
     if _driver is not None:
         return _driver
@@ -49,6 +67,7 @@ def get_driver():
     except Exception as e:
         logger.error(f"Failed to connect to Neo4j database: {e}. Falling back to mock database.")
         _use_mock = True
+        _last_connection_failure = time.monotonic()
         if _driver:
             try:
                 _driver.close()

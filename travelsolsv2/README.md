@@ -1,6 +1,6 @@
 # TravelRoute Intelligence v2 — Autonomous Travel Booking Agent
 
-TravelRoute Intelligence v2 is the autonomous transaction and booking layer that sits alongside TravelRoute v1. While v1 focuses on time-series travel demand forecasting and surge pricing simulations, v2 focuses on autonomous booking workflows using GraphRAG (Neo4j + ChromaDB), flight shopping APIs (Travel Dev Studio), and a LangChain ReAct agent powered by Meta-Llama-3-8B-Instruct.
+TravelRoute Intelligence v2 is the autonomous transaction and booking layer that sits alongside TravelRoute v1. While v1 focuses on time-series travel demand forecasting and surge pricing simulations, v2 focuses on autonomous booking workflows using GraphRAG (Neo4j + ChromaDB), flight shopping APIs (Travel Dev Studio), and a LangChain ReAct agent powered by Qwen2.5-7B-Instruct.
 
 ---
 
@@ -52,7 +52,7 @@ This application runs entirely on zero-cost infrastructure and local resources:
 | --- | --- | --- | --- | --- |
 | **Neo4j AuraDB Free** | Cloud graph database | 200,000 nodes & 400,000 relationships | Free | [console.neo4j.io](https://console.neo4j.io/) |
 | **ChromaDB** | Fully local vector store | Unlimited storage | Free | Local (No key) |
-| **Hugging Face Hub** | Serverless inference API | ~1,000 queries per day (Meta-Llama-3-8B-Instruct) | Free | [huggingface.co](https://huggingface.co/) |
+| **Hugging Face Hub** | Serverless inference API | Qwen2.5-7B-Instruct and Qwen2.5-Coder-7B-Instruct | Depends on provider | [huggingface.co](https://huggingface.co/) |
 | **Travel Developer Sandbox**| Dev Studio certification environment | Free sandbox testing | Free | [developer.travel.com](https://developer.travel.com/) |
 | **Open-Meteo API** | Weather forecasting | Unlimited queries | Free | Local (No key) |
 

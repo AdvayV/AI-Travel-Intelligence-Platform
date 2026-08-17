@@ -1,9 +1,11 @@
 import re
 import logging
+from tls_config import enable_system_trust_store
 from graph.neo4j_client import run_query, get_driver, get_route_info, get_active_waivers, get_corporate_policy
 from vector.chroma_client import ChromaClient
 
 logger = logging.getLogger(__name__)
+enable_system_trust_store()
 
 AIRPORTS = [
     "BOM", "DEL", "BLR", "MAA", "HYD", "DXB", "SIN", "LHR", "JFK", "CDG", "NRT", "BKK", "KUL", "DOH", "SYD",
@@ -86,7 +88,7 @@ def extract_entities_with_llm(query: str) -> dict:
         llm = ChatOpenAI(
             base_url="https://router.huggingface.co/v1",
             api_key=hf_key,
-            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            model="Qwen/Qwen2.5-7B-Instruct",
             max_tokens=150,
             temperature=0.0,
             timeout=8
