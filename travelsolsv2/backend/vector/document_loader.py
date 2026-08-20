@@ -75,6 +75,9 @@ def load_documents():
              "Lounge access is included, and baggage allowance is restricted to 30kg. "
              "Miles accumulation is set at 100%. This class is subject to seat allocation limits and is typically unavailable for last-minute bookings. "
              "Minimum stay of 7 days is required for international sectors."),
+
+            ("Full First Fare Class F executive terms. F class is reserved for Grade 9 travelers and must be explicitly requested. "
+             "It is fully changeable and refundable, includes First Class lounge access and priority services, and remains subject to CP-003."),
              
             # Fare G
             ("Group Fare Class G contract rules. G class is dedicated to group bookings of 10 or more passengers traveling together on the same itinerary. "
@@ -86,8 +89,8 @@ def load_documents():
              "Special meal requests must be submitted at least 72 hours in advance. Ticket validity is restricted to the specific booked flights only.")
         ]
         
-        fare_ids = [f"RULE_{fc}" for fc in ["Y", "M", "K", "Q", "J", "C", "D", "G"]]
-        fare_metas = [{"fare_class": fc, "type": "fare_rule"} for fc in ["Y", "M", "K", "Q", "J", "C", "D", "G"]]
+        fare_ids = [f"RULE_{fc}" for fc in ["Y", "M", "K", "Q", "J", "C", "D", "F", "G"]]
+        fare_metas = [{"fare_class": fc, "type": "fare_rule"} for fc in ["Y", "M", "K", "Q", "J", "C", "D", "F", "G"]]
         
         chroma.add_documents("fare_rules", fare_docs, fare_ids, fare_metas)
         
@@ -243,11 +246,11 @@ def _seed_default_policies(chroma, corp_policies_col):
     logger.info("Seeding comprehensive default corporate travel policies into ChromaDB...")
     default_docs = [
         # CP-001: Class Guidelines
-        ("Corporate Travel Policy Clause CP-001 - Air Cabins & Classes: "
-         "All standard employees (non-executive grades) must book Economy Class (specifically restricted to Fare Classes Y, M, K, Q) "
-         "for all flights under 6 hours block time. Business Class travel (Fare Classes J, C, D) is permitted only for "
-         "senior management (VPs and above) or when the flight duration exceeds 6 hours of continuous travel (e.g. BOM to JFK or DEL to LHR). "
-         "Deep discount economy class Q is allowed but offers restricted baggage rules. First Class travel requires CEO approval."),
+        ("Corporate Travel Policy Clause CP-001 - Employee Grades, Air Cabins & Classes: "
+         "Grades 1 through 5 must book Economy Class using Fare Classes Y, M, K, or Q on every route. "
+         "Grades 6 and 7 may book Business Class using Fare Classes J, C, or D only on long-haul routes; otherwise Economy is required. "
+         "Grade 8 may book Economy or Business on all routes. Grade 9 may book Economy, Business, or First Class F, "
+         "with Business as the default unless First is explicitly requested. An explicit grade in a booking request overrides a saved traveler default."),
         
         # CP-002: Advance Booking
         ("Corporate Travel Policy Clause CP-002 - Booking Window & Lead Times: "
@@ -307,5 +310,3 @@ def _seed_default_policies(chroma, corp_policies_col):
     ids = [f"DEFAULT_POLICY_{i}" for i in range(len(default_docs))]
     metas = [{"policy_id": f"CP-{i+1:03d}", "type": "default_policy"} for i in range(len(default_docs))]
     chroma.add_documents("corporate_policies", default_docs, ids, metas)
-
-

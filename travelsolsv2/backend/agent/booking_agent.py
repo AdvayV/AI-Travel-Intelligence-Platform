@@ -2,78 +2,19 @@ import os
 import re
 import random
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from dotenv import load_dotenv
 from tls_config import enable_system_trust_store
 from agent.graph_rag import retrieve_context
+from agent.policy_resolver import resolve_booking_policy
+from agent.query_parser import parse_prompt_date
 from agent.tools import ALL_TOOLS
-
-def parse_prompt_date(query: str, current_date_str: str = "2026-06-25") -> str:
-    query_lower = query.lower()
-    
-    # 1. Look for absolute date YYYY-MM-DD or YYYY/MM/DD
-    date_match = re.search(r"\b(\d{4})[-/](\d{2})[-/](\d{2})\b", query)
-    if date_match:
-        y, m, d = date_match.group(1), date_match.group(2), date_match.group(3)
-        return f"{y}-{m}-{d}"
-        
-    # 2. Look for DD-MM-YYYY or DD/MM/YYYY
-    date_match_reverse = re.search(r"\b(\d{2})[-/](\d{2})[-/](\d{4})\b", query)
-    if date_match_reverse:
-        d, m, y = date_match_reverse.group(1), date_match_reverse.group(2), date_match_reverse.group(3)
-        return f"{y}-{m}-{d}"
-        
-    # 3. Look for named month patterns like "June 25, 2026" or "25 June 2026" or "25th June 2026"
-    months = {
-        "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
-        "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
-        "january": "01", "february": "02", "march": "03", "april": "04", "june": "06",
-        "july": "07", "august": "08", "september": "09", "october": "10", "november": "11", "december": "12"
-    }
-    
-    for month_name, m_num in months.items():
-        pat1 = rf"\b(\d{1,2})(?:st|nd|rd|th)?\s+{month_name}\s+(\d{4})\b"
-        pat2 = rf"\b{month_name}\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(\d{4})\b"
-        
-        m1 = re.search(pat1, query_lower)
-        if m1:
-            d_val = m1.group(1).zfill(2)
-            y_val = m1.group(2)
-            return f"{y_val}-{m_num}-{d_val}"
-            
-        m2 = re.search(pat2, query_lower)
-        if m2:
-            d_val = m2.group(1).zfill(2)
-            y_val = m2.group(2)
-            return f"{y_val}-{m_num}-{d_val}"
-            
-    try:
-        base_date = datetime.strptime(current_date_str, "%Y-%m-%d").date()
-    except:
-        base_date = date(2026, 6, 25)
-        
-    # 4. Check relative terms
-    if "today" in query_lower:
-        return base_date.strftime("%Y-%m-%d")
-    elif "tomorrow" in query_lower:
-        return (base_date + timedelta(days=1)).strftime("%Y-%m-%d")
-    elif "day after tomorrow" in query_lower:
-        return (base_date + timedelta(days=2)).strftime("%Y-%m-%d")
-    elif "next week" in query_lower:
-        return (base_date + timedelta(days=7)).strftime("%Y-%m-%d")
-        
-    # 5. Check for "in X days"
-    days_match = re.search(r"\bin\s+(\d+)\s+days\b", query_lower)
-    if days_match:
-        days = int(days_match.group(1))
-        return (base_date + timedelta(days=days)).strftime("%Y-%m-%d")
-        
-    return current_date_str
 
 load_dotenv()
 enable_system_trust_store()
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+AGENT_MODE = os.getenv("AGENT_MODE", "deterministic").strip().lower()
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +31,7 @@ except ImportError:
 
 # Attempt to initialize LLM if LangChain is available
 _llm = None
-if LANGCHAIN_AVAILABLE and HUGGINGFACE_API_KEY and HUGGINGFACE_API_KEY != "your_huggingface_api_key_here":
+if AGENT_MODE == "llm" and LANGCHAIN_AVAILABLE and HUGGINGFACE_API_KEY and HUGGINGFACE_API_KEY != "your_huggingface_api_key_here":
     try:
         logger.info("Initializing Hugging Face Qwen2.5-7B-Instruct via OpenAI-compatible router...")
         _llm = ChatOpenAI(
@@ -105,65 +46,36 @@ if LANGCHAIN_AVAILABLE and HUGGINGFACE_API_KEY and HUGGINGFACE_API_KEY != "your_
         logger.error(f"Failed to initialize HuggingFace LLM: {e}. Agent will run in mock deterministic mode.")
         _llm = None
 else:
-    if LANGCHAIN_AVAILABLE:
-        logger.warning("HUGGINGFACE_API_KEY not set. Agent will run in mock deterministic mode.")
+    if LANGCHAIN_AVAILABLE and AGENT_MODE != "llm":
+        logger.info("AGENT_MODE is deterministic; using the local policy engine without paid LLM calls.")
+    elif LANGCHAIN_AVAILABLE:
+        logger.warning("HUGGINGFACE_API_KEY not set. Agent will run in deterministic mode.")
 
 def extract_booking_params(query: str, entities: dict, passenger: str = None) -> tuple:
-    passenger_bands = {
-        "Aryan Mehta": 7,
-        "Priya Sharma": 4,
-        "Rajesh Kumar": 8,
-        "Anita Singh": 3,
-        "Vikram Nair": 9
-    }
-    
-    # 1. Parse band
-    band = None
-    band_match = re.search(r"\b[Bb]and\s*([1-9])\b", query)
-    if band_match:
-        band = int(band_match.group(1))
-    else:
-        p_name = passenger
-        if p_name and p_name.strip() in passenger_bands:
-            band = passenger_bands[p_name.strip()]
-        else:
-            for k, v in passenger_bands.items():
-                if k.lower() in query.lower():
-                    band = v
-                    break
-    if band is None:
-        band = 5  # default band
-        
-    # 2. Determine cabin class
-    dest = entities["airports"][1] if entities.get("airports") and len(entities["airports"]) > 1 else "DXB"
-    is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
-    
-    if "business" in query.lower():
-        cabin_class = "BUSINESS"
-    elif "first" in query.lower():
-        cabin_class = "FIRST"
-    elif "economy" in query.lower():
-        cabin_class = "ECONOMY"
-    elif is_long_haul and band >= 6:
-        # Long-haul and band permit business class -> Default to BUSINESS
-        cabin_class = "BUSINESS"
-    else:
-        cabin_class = "ECONOMY"
-        
-    # 3. Determine policy ID
-    if not entities.get("policies"):
-        if 6 <= band <= 8:
-            policy_id = "CP-002"
-        elif band == 9:
-            policy_id = "CP-003"
-        else:
-            policy_id = "CP-001"
-    else:
-        policy_id = entities["policies"][0]
-        
-    return band, cabin_class, policy_id
+    decision = resolve_booking_policy(query, entities, passenger)
+    return decision["employee_grade"], decision["cabin_class"], decision["policy_id"]
 
-def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_class: str, policy_id: str, band: int = None) -> list:
+def _display_cabin(flight: dict) -> str:
+    cabin = flight.get("cabin_class", "ECONOMY")
+    fare_class = flight.get("fare_class")
+    if cabin == "FIRST" or fare_class == "F":
+        return "First"
+    if cabin == "BUSINESS" or fare_class in ["J", "C", "D"]:
+        return "Business"
+    if cabin == "PREMIUM_ECONOMY" or fare_class == "W":
+        return "Premium Economy"
+    return "Economy"
+
+
+def evaluate_flight_options(
+    origin: str,
+    dest: str,
+    travel_date: str,
+    cabin_class: str,
+    policy_id: str,
+    band: int = None,
+    policy_decision: dict = None,
+) -> list:
     from travel.flight_search import search_flights_api
     from graph.neo4j_client import get_active_waivers, get_corporate_policy
     from agent.tools import get_weather_risk_tool
@@ -243,6 +155,19 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
     except Exception as e:
         logger.error(f"Policy retrieval failed in evaluation: {e}")
         policy = {}
+
+    policy_context = dict(policy_decision or {})
+    policy_context.update({
+        "employee_grade": band,
+        "policy_id": policy_id,
+        "policy_name": policy.get("name", policy_id),
+        "allowed_cabins": policy_context.get("allowed_cabins", policy.get("allowed_cabins", [])),
+        "min_advance_days": policy.get("min_advance_days", 0),
+        "max_fare_inr": policy.get("max_fare_inr"),
+        "travel_date": travel_date,
+        "origin": origin,
+        "destination": dest,
+    })
         
     evaluated = []
     
@@ -260,12 +185,22 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         airline = f["airline"]
         f_class = f["fare_class"]
         price = f["price_inr"]
+        is_live_price = bool(f.get("is_live_price"))
 
-        display_class = "Business" if f_class in ["J", "C", "D"] or f.get("cabin_class") == "BUSINESS" else "Economy"
+        display_class = _display_cabin(f)
 
-        # Apply surge multiplier if demand is high on this route
         surge_applied = None
+        market_signal = None
         if surge_info:
+            market_signal = {
+                "multiplier": surge_info["multiplier"],
+                "score": surge_info["score"],
+                "tier": surge_info["tier"],
+                "trend": surge_info["trend"],
+                "note": "Forecast signal only; it does not alter live comparison fares."
+            }
+
+        if surge_info and not is_live_price:
             pre_surge_price = price
             price = int(price * surge_info["multiplier"])
             surge_applied = {
@@ -283,19 +218,23 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         
         violations = []
         waiver_exceptions = []
+        approval_reasons = []
 
         # Check passenger band and destination restrictions
         if band is not None:
             # Bands 1-5: strictly restricted to Economy on all routes
             if 1 <= band <= 5:
-                if display_class == "Business":
+                if display_class != "Economy":
                     violations.append(f"Passenger is in Band {band} and is restricted to Economy travel only")
             # Bands 6-7: allowed Business only on transcontinental routes
             elif 6 <= band <= 7:
                 is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
                 if display_class == "Business" and not is_long_haul:
                     violations.append(f"Passenger is in Band {band} and is restricted to Economy on short-haul/medium-haul routes (only transcontinental routes permit Business class)")
-            # Bands 8-9: allowed Business on all routes
+                if display_class == "First":
+                    violations.append(f"Passenger is in Band {band}; First class is reserved for Grade 9 executives")
+            elif band == 8 and display_class == "First":
+                violations.append("Passenger is in Band 8; First class is reserved for Grade 9 executives")
         
         # Check fare class compliance
         allowed_fare_classes_normalized = list(allowed_fare_classes)
@@ -305,6 +244,8 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
             if (band >= 8) or (6 <= band <= 7 and is_long_haul):
                 # Ensure business classes are allowed
                 allowed_fare_classes_normalized.extend(["J", "C", "D"])
+        elif display_class == "First" and band == 9:
+            allowed_fare_classes_normalized.append("F")
                 
         if f_class not in allowed_fare_classes_normalized:
             # Waiver Exception: CP-001 monsoon provisions reduces restrictions for Y class
@@ -326,7 +267,9 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
             elif policy_id == "CP-002" and dest in ["LHR", "JFK"] and advance_days < min_advance:
                 waiver_exceptions.append("Advance booking window exception applied for transcontinental sector > 8h")
             else:
-                violations.append(f"Booked {advance_days} days in advance, policy requires {min_advance} days")
+                approval_reasons.append(
+                    f"Booked {advance_days} days in advance; the policy target is {min_advance} days and VP approval is required"
+                )
                 
         # Check preferred carrier
         is_preferred = airline in pref_airlines
@@ -341,6 +284,9 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
         elif waiver_exceptions:
             compliant = True
             compliance_details = "COMPLIANT via Waiver Exception: " + "; ".join(waiver_exceptions)
+        elif approval_reasons:
+            compliant = True
+            compliance_details = "CONDITIONALLY COMPLIANT: " + "; ".join(approval_reasons)
         else:
             compliant = True
             compliance_details = "COMPLIANT: All checks passed."
@@ -348,7 +294,7 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
                 compliance_details += f" ({carrier_note} requires notification)"
                 
         # Check if booking requires approval
-        requires_approval = False
+        requires_approval = bool(approval_reasons)
         approval_threshold = policy.get("requires_approval_above_inr", 999999)
         if compliant and price > approval_threshold:
             requires_approval = True
@@ -367,17 +313,25 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
                 disruption_risk = "MODERATE"
                 disruption_warning = "Monsoon warning active. Afternoon flights carry lower delay probability."
                 
-        # Corporate discount: CORP-AI-ANNUAL gives 12% discount on Air India (AI) flights
         original_price = price
         discount_applied = None
-        if airline == "AI" and any(w.get("id") == "CORP-AI-ANNUAL" for w in waivers):
+        discount_note = None
+        has_air_india_discount = airline == "AI" and any(
+            w.get("id") == "CORP-AI-ANNUAL" for w in waivers
+        )
+        if has_air_india_discount and not is_live_price:
             discounted_price = int(price * 0.88)
             price = discounted_price
             discount_applied = "12% Corporate AI Discount"
+        elif has_air_india_discount:
+            discount_note = "Potential 12% corporate Air India discount; verify during booking."
             
         evaluated.append({
+            "offer_id": f.get("offer_id"),
             "flight_number": f_num,
             "airline": airline,
+            "airline_name": f.get("airline_name", airline),
+            "airline_codes": f.get("airline_codes", [airline]),
             "origin": f["origin"],
             "destination": f["destination"],
             "departure_time": f["departure_time"],
@@ -388,14 +342,35 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
             "price_inr": price,
             "original_price_inr": original_price,
             "discount_applied": discount_applied,
+            "discount_note": discount_note,
             "surge_applied": surge_applied,
+            "market_signal": market_signal,
             "compliant": compliant,
             "requires_approval": requires_approval,
             "compliance_details": compliance_details,
             "disruption_risk": disruption_risk,
             "disruption_warning": disruption_warning,
             "weather": weather_summary,
-            "is_alternative": False
+            "is_alternative": False,
+            "currency": f.get("currency", "INR"),
+            "source": f.get("source", "UNKNOWN"),
+            "price_source": f.get("price_source", "Unknown source"),
+            "is_live_price": is_live_price,
+            "observed_at": f.get("observed_at"),
+            "cache_status": f.get("cache_status"),
+            "search_url": f.get("search_url"),
+            "price_note": f.get("price_note"),
+            "fallback_reason": f.get("fallback_reason"),
+            "fare_class_estimated": f.get("fare_class_estimated", False),
+            "segments": f.get("segments", []),
+            "carbon_emissions_kg": f.get("carbon_emissions_kg"),
+            "typical_carbon_emissions_kg": f.get("typical_carbon_emissions_kg"),
+            "employee_grade": band,
+            "policy_id": policy_id,
+            "policy_name": policy_context["policy_name"],
+            "allowed_cabins": policy_context["allowed_cabins"],
+            "cabin_reason": policy_context.get("cabin_reason"),
+            "policy_context": policy_context,
         })
         
     # Generate weather resilient or rerouting alternatives
@@ -411,7 +386,7 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
             f_class = f["fare_class"]
             price = f["price_inr"]
 
-            display_class = "Business" if f_class in ["J", "C", "D"] or f.get("cabin_class") == "BUSINESS" else "Economy"
+            display_class = _display_cabin(f)
             
             # Policy evaluation
             violations = []
@@ -430,8 +405,11 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
             details = "COMPLIANT: Weather-resilient reroute from BLR." if compliant else "NON-COMPLIANT: " + "; ".join(violations)
             
             evaluated.append({
+                "offer_id": f.get("offer_id"),
                 "flight_number": f["flight_number"],
                 "airline": airline,
+                "airline_name": f.get("airline_name", airline),
+                "airline_codes": f.get("airline_codes", [airline]),
                 "origin": f["origin"],
                 "destination": f["destination"],
                 "departure_time": f["departure_time"],
@@ -448,7 +426,26 @@ def evaluate_flight_options(origin: str, dest: str, travel_date: str, cabin_clas
                 "disruption_risk": "LOW",
                 "disruption_warning": "Departure from BLR hub is unaffected by Mumbai Monsoon.",
                 "weather": weather_summary,
-                "is_alternative": True
+                "is_alternative": True,
+                "currency": f.get("currency", "INR"),
+                "source": f.get("source", "UNKNOWN"),
+                "price_source": f.get("price_source", "Unknown source"),
+                "is_live_price": bool(f.get("is_live_price")),
+                "observed_at": f.get("observed_at"),
+                "cache_status": f.get("cache_status"),
+                "search_url": f.get("search_url"),
+                "price_note": f.get("price_note"),
+                "fallback_reason": f.get("fallback_reason"),
+                "fare_class_estimated": f.get("fare_class_estimated", False),
+                "segments": f.get("segments", []),
+            "carbon_emissions_kg": f.get("carbon_emissions_kg"),
+                "typical_carbon_emissions_kg": f.get("typical_carbon_emissions_kg"),
+                "employee_grade": band,
+                "policy_id": policy_id,
+                "policy_name": policy_context["policy_name"],
+                "allowed_cabins": policy_context["allowed_cabins"],
+                "cabin_reason": policy_context.get("cabin_reason"),
+                "policy_context": policy_context,
             })
             
     return evaluated
@@ -464,8 +461,10 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
     dest = entities["airports"][1] if len(entities["airports"]) > 1 else "DXB"
     date_str = parse_prompt_date(query)
     
-    # Dynamically extract passenger band, cabin class, and policy
-    band, cabin_class, policy_id = extract_booking_params(query, entities, passenger)
+    policy_decision = resolve_booking_policy(query, entities, passenger)
+    band = policy_decision["employee_grade"]
+    cabin_class = policy_decision["cabin_class"]
+    policy_id = policy_decision["policy_id"]
     
     # If LLM is not available or LangChain is not installed, run fallback mock execution directly
     if _llm is None or not LANGCHAIN_AVAILABLE:
@@ -537,7 +536,15 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
         # Passenger band and policy determined at start of function
         pass
             
-        flight_options = evaluate_flight_options(origin, dest, date_str, cabin_class, policy_id, band)
+        flight_options = evaluate_flight_options(
+            origin,
+            dest,
+            date_str,
+            cabin_class,
+            policy_id,
+            band,
+            policy_decision,
+        )
         if flight_options and not any(f["compliant"] for f in flight_options):
             compliant = False
             
@@ -547,7 +554,13 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
             "graph_context": context,
             "pnr": pnr_code,
             "compliant": compliant,
-            "flight_options": flight_options
+            "flight_options": flight_options,
+            "request_context": flight_options[0]["policy_context"] if flight_options else {
+                **policy_decision,
+                "origin": origin,
+                "destination": dest,
+                "travel_date": date_str,
+            },
         }
         
     except Exception as err:
@@ -561,8 +574,10 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     dest = entities["airports"][1] if len(entities["airports"]) > 1 else "DXB"
     date_str = parse_prompt_date(query)
         
-    # Dynamically extract passenger band, cabin class, and policy
-    band, cabin_class, policy_id = extract_booking_params(query, entities, passenger)
+    policy_decision = resolve_booking_policy(query, entities, passenger)
+    band = policy_decision["employee_grade"]
+    cabin_class = policy_decision["cabin_class"]
+    policy_id = policy_decision["policy_id"]
     
     steps = []
     
@@ -594,7 +609,15 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     })
     
     # Get evaluated flight options
-    flight_options = evaluate_flight_options(origin, dest, date_str, cabin_class, policy_id, band)
+    flight_options = evaluate_flight_options(
+        origin,
+        dest,
+        date_str,
+        cabin_class,
+        policy_id,
+        band,
+        policy_decision,
+    )
     
     # Step 4: check_policy_compliance
     if flight_options:
@@ -619,27 +642,28 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     if active_w:
         w_details = f" Note that active fee waiver(s) {', '.join([w['id'] for w in active_w])} are in effect for {origin} departures."
     
-    # Summarise surge status for the answer
+    # Summarise the demand forecast without presenting it as a fare adjustment.
     from scheduler import get_single_forecast
     surge_summary = ""
     try:
         fc = get_single_forecast(origin.upper(), dest.upper())
         if fc and fc.get("surge_multiplier", 1.0) > 1.0:
             surge_summary = (
-                f"\n\n⚡ **Surge Pricing Active**: High demand detected on the {origin}→{dest} route "
+                f"\n\n⚡ **High Demand Signal**: High demand detected on the {origin}→{dest} route "
                 f"(Demand Tier: **{fc['tier']}**, Score: **{fc['score']:.0f}**, Trend: **{fc['trend']}**). "
-                f"A **{fc['surge_multiplier']}x multiplier** has been applied to base fares."
+                "This is advisory analytics; live observed fares are unchanged."
             )
     except Exception:
         pass
 
     final_ans = (
-        f"I have successfully analyzed the travel booking parameters for passenger {passenger} from {origin} to {dest} on {date_str}.\n\n"
+        f"I analyzed the trip for {passenger} from {origin} to {dest} on {date_str}.\n\n"
+        f"**Grade & Cabin Decision**: Grade {band} maps to {policy_id}. {policy_decision['cabin_reason']}\n\n"
         f"1. **Waiver Check**: Checked active waivers for {origin}.{w_details}\n\n"
         f"2. **Weather Risk**: Checked destination weather for {dest}. Stability score computed.\n\n"
         f"3. **Flight Options**: Checked available flight options on {date_str} and retrieved {len(flight_options)} possible routes (including weather-resilient alternatives).{surge_summary}\n\n"
         f"4. **Compliance Status**: Evaluated flight details against corporate policy {policy_id}.\n\n"
-        f"Please select your preferred itinerary option from the interactive Selector Card below to complete the booking registry."
+        f"Please select your preferred itinerary option below to save a non-ticketing demo reference."
     )
     
     return {
@@ -648,5 +672,11 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
         "graph_context": context,
         "pnr": None,
         "compliant": compliant,
-        "flight_options": flight_options
+        "flight_options": flight_options,
+        "request_context": flight_options[0]["policy_context"] if flight_options else {
+            **policy_decision,
+            "origin": origin,
+            "destination": dest,
+            "travel_date": date_str,
+        },
     }

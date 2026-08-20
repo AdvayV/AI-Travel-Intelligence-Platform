@@ -7,6 +7,7 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
     neo4j: false,
     chroma: false,
     huggingface: false,
+    agentMode: 'deterministic',
     forecastCacheSize: 0,
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -24,6 +25,7 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
           neo4j: data.neo4j === true,
           chroma: chromaSeeded,
           huggingface: data.huggingface === true,
+          agentMode: data.agent_mode || 'deterministic',
           forecastCacheSize: data.forecast_cache_size || 0,
         });
       }
@@ -54,20 +56,18 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
   };
 
   return (
-    <header className="h-16 px-6 bg-surface-raised border-b border-border flex items-center justify-between sticky top-0 z-50 shadow-sm transition-all duration-300">
+    <header className="sticky top-0 z-50 flex min-h-16 items-center justify-between gap-3 border-b border-border bg-white/90 px-4 py-2 shadow-sm backdrop-blur-xl transition-all duration-300 sm:px-6">
       {/* Left Wordmark */}
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-sky-500 text-xs font-black text-white shadow-md shadow-indigo-200">TR</div>
         <div className="flex items-baseline">
-          <span className="text-base font-bold text-accent">TravelRoute</span>
-          <span className="text-base font-semibold text-text-secondary ml-1">Intelligence Portal</span>
-          <span className="ml-2 align-super bg-accent-light text-accent-text text-[10px] px-2 py-0.5 rounded-full font-bold">
-            Unified
-          </span>
+          <span className="text-sm font-extrabold tracking-tight text-text-primary sm:text-base">TravelRoute</span>
+          <span className="ml-1 hidden text-sm font-semibold text-text-secondary lg:inline">Intelligence</span>
         </div>
       </div>
 
       {/* Center Tabs Navigation */}
-      <div className="flex bg-surface p-1 rounded-xl border border-border">
+      <nav className="flex rounded-xl border border-border bg-surface p-1" aria-label="Primary navigation">
         <button
           onClick={() => setActiveTab('booking')}
           className={`flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all duration-300 ${
@@ -76,7 +76,7 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
               : 'text-text-secondary hover:text-text-primary'
           }`}
         >
-          🤖 Booking Agent
+          Booking
         </button>
         <button
           onClick={() => setActiveTab('policy')}
@@ -86,12 +86,12 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
               : 'text-text-secondary hover:text-text-primary'
           }`}
         >
-          🕸️ Policy Graph
+          Policy graph
         </button>
-      </div>
+      </nav>
 
       {/* Right Action & Status Indicators */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         {/* Status Pills */}
         <div className="hidden xl:flex items-center gap-2">
           <StatusPill 
@@ -103,8 +103,8 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
             label={health.chroma ? 'ChromaDB Local' : 'ChromaDB Missing'} 
           />
           <StatusPill 
-            status={health.huggingface ? 'success' : 'warning'} 
-            label={health.huggingface ? 'HF Live Agent' : 'HF Mock (Offline)'} 
+            status={health.agentMode === 'deterministic' || health.huggingface ? 'success' : 'warning'}
+            label={health.agentMode === 'deterministic' ? 'Policy Engine' : health.huggingface ? 'LLM Agent' : 'LLM Offline'}
           />
         </div>
 
@@ -115,14 +115,14 @@ export default function TopBar({ onNewBooking, onRefreshForecasts, activeTab, se
               onClick={onNewBooking}
               className="bg-accent text-white px-4 py-2 text-xs font-bold rounded-lg hover:bg-accent-text transition-all duration-200 shadow-sm"
             >
-              New Booking Session
+              <span className="sm:hidden">New</span><span className="hidden sm:inline">New booking</span>
             </button>
           ) : (
             <button
               onClick={() => fetch('/api/policy/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
               className="bg-purple-600 text-white px-4 py-2 text-xs font-bold rounded-lg hover:bg-purple-500 transition-all duration-200 shadow-sm"
             >
-              🔄 Re-Ingest PDF
+              Refresh policy
             </button>
           )}
         </div>

@@ -18,8 +18,16 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
     return names[code] || code;
   };
 
+  const formatObservedAt = (value) => {
+    if (!value) return 'Time unavailable';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  };
+
   const renderFlightCard = (flight) => {
-    const isSelected = selected && selected.flight_number === flight.flight_number && selected.fare_class === flight.fare_class;
+    const selectionKey = flight.offer_id || `${flight.flight_number}-${flight.departure_time}`;
+    const selectedKey = selected && (selected.offer_id || `${selected.flight_number}-${selected.departure_time}`);
+    const isSelected = selectedKey === selectionKey;
     
     // Status style and label
     let statusBg = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
@@ -59,7 +67,7 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
 
     return (
       <div
-        key={`${flight.flight_number}-${flight.fare_class}`}
+        key={selectionKey}
         onClick={() => onSelect(flight)}
         className={`relative border rounded-lg p-4 cursor-pointer transition-all duration-200 flex flex-col gap-3 group select-none
           ${isSelected 
@@ -76,8 +84,14 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
 
         {/* Top Badges */}
         <div className="flex flex-wrap items-center gap-2 pr-6">
+          <span className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-700">
+            Grade {flight.employee_grade} · {flight.policy_id}
+          </span>
           <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded border ${statusBg}`}>
             {statusLabel}
+          </span>
+          <span className={`text-[10px] font-bold tracking-wide uppercase px-2 py-0.5 rounded border ${flight.is_live_price ? 'bg-sky-500/10 text-sky-400 border-sky-500/25' : 'bg-amber-500/10 text-amber-400 border-amber-500/25'}`}>
+            {flight.is_live_price ? 'Live Google Flights fare' : 'Estimated fallback fare'}
           </span>
           {weatherRiskBadge}
           {flight.surge_applied && (
@@ -90,13 +104,18 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
               🚁 Route Reroute
             </span>
           )}
+          {flight.market_signal && (
+            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20">
+              Demand signal: {flight.market_signal.tier}
+            </span>
+          )}
         </div>
 
         {/* Flight Core Info */}
         <div className="flex justify-between items-center mt-1">
           <div className="flex flex-col">
             <span className="text-sm font-bold text-text-primary tracking-wide">{flight.flight_number}</span>
-            <span className="text-xs text-text-secondary">{getAirlineName(flight.airline)}</span>
+            <span className="text-xs text-text-secondary">{flight.airline_name || getAirlineName(flight.airline)}</span>
           </div>
 
           <div className="flex flex-col items-center px-4">
@@ -131,6 +150,31 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
           </div>
         </div>
 
+        {flight.cabin_reason && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[10px] leading-relaxed text-indigo-800">
+            <span className="font-bold">Cabin decision:</span> {flight.cabin_reason}
+          </div>
+        )}
+
+        <div className={`rounded-md border px-3 py-2 text-[10px] ${flight.is_live_price ? 'border-sky-200 bg-sky-50 text-sky-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-bold">{flight.price_source || 'Unknown fare source'} · observed {formatObservedAt(flight.observed_at)}</span>
+            {flight.cache_status === 'HIT' && <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-text-tertiary">cached</span>}
+          </div>
+          {flight.price_note && <p className="mt-1 text-text-secondary">{flight.price_note}</p>}
+          {flight.search_url && (
+            <a
+              href={flight.search_url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              className="mt-1.5 inline-flex font-bold text-accent hover:underline"
+            >
+              Verify this search on Google Flights ↗
+            </a>
+          )}
+        </div>
+
         {/* Warnings or Waivers notes */}
         {(flight.disruption_warning || flight.compliance_details) && (
           <div className="border-t border-border/40 pt-2.5 flex flex-col gap-1.5">
@@ -155,7 +199,7 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
       {/* Standard Flights Section */}
       <div className="flex flex-col gap-2.5">
         <h4 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-          <span>🎯 Available flights for requested sector</span>
+          <span>Policy-ranked flight options</span>
           <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -167,7 +211,7 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
       {alternateFlights.length > 0 && (
         <div className="flex flex-col gap-2.5 border-t border-border/80 pt-4">
           <h4 className="text-xs font-bold text-teal-400 uppercase tracking-wider flex items-center gap-1.5">
-            <span>🛡️ Weather-resilient hub re-routing recommendations</span>
+            <span>Weather-resilient route alternatives</span>
           </h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {alternateFlights.map(renderFlightCard)}

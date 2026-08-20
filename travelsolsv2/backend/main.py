@@ -100,6 +100,35 @@ class AgentRequest(BaseModel):
     query: str
     passenger_id: str = None
 
+class FlightSearchRequest(BaseModel):
+    origin: str
+    destination: str
+    date: str
+    cabin_class: str = "ECONOMY"
+
+@app.post("/api/flights/search")
+def api_search_flights(body: FlightSearchRequest):
+    try:
+        from travel.flight_search import search_flights_api
+
+        flights = search_flights_api(
+            body.origin,
+            body.destination,
+            body.date,
+            body.cabin_class,
+        )
+        return {
+            "status": "success",
+            "count": len(flights),
+            "source": flights[0].get("price_source") if flights else None,
+            "flights": flights,
+        }
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Live fare search failed")
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
 @app.post("/api/agent/run")
 async def run_agent(body: AgentRequest):
     if not body.query:
@@ -265,8 +294,8 @@ def api_create_booking(body: BookingRequest):
         from travel.pnr_builder import create_pnr_api
         from graph.neo4j_client import write_booking
         
-        logger.info(f"Creating booking PNR for passenger: {body.passenger_name}")
-        # Create PNR via Travel / mock Travel
+        logger.info(f"Saving demo itinerary for passenger: {body.passenger_name}")
+        # Create a non-ticketing demo reference.
         booking_res = create_pnr_api(
             body.passenger_name,
             body.flight_number,
@@ -282,7 +311,7 @@ def api_create_booking(body: BookingRequest):
         
         return booking_res
     except Exception as e:
-        logger.exception("Failed to create PNR booking node")
+        logger.exception("Failed to save demo itinerary node")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/booking/history")
@@ -637,6 +666,7 @@ def api_health():
         "neo4j": neo4j_ok,
         "chroma": chroma_counts,
         "huggingface": hf_ok,
+        "agent_mode": os.getenv("AGENT_MODE", "deterministic"),
         "chronos_model": "chronos-bolt-small",
         "forecast_cache_size": len(FORECAST_CACHE),
         "last_forecast_refresh": LAST_REFRESH.isoformat() if LAST_REFRESH else None

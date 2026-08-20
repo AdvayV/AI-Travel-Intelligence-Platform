@@ -54,6 +54,7 @@ SEED_DATA = {
         {"code": "J", "name": "Full Business", "change_fee_inr": 0, "refund_pct": 100, "description": "Premium full-flex business class. Fully changeable for free. Fully refundable for a 100% refund. Includes priority boarding and lounge access."},
         {"code": "C", "name": "Semi-restricted business", "change_fee_inr": 15000, "refund_pct": 80, "description": "Semi-flexible business class class. Changeable for INR 15,000 fee. 80% refund on cancellation."},
         {"code": "D", "name": "Discounted business", "change_fee_inr": 25000, "refund_pct": 0, "description": "Discounted business class fare. Changeable with a high fee of INR 25,000. Absolutely non-refundable."},
+        {"code": "F", "name": "Full First", "change_fee_inr": 0, "refund_pct": 100, "description": "Executive First Class fare available to Grade 9 travelers when explicitly requested."},
         {"code": "G", "name": "Group fare", "change_fee_inr": 10000, "refund_pct": 25, "description": "Special group booking conditions apply. Changeable for INR 10,000. 25% refund on cancellation. Requires a minimum of 10 passengers."}
     ],
     "waivers": [
@@ -129,7 +130,7 @@ SEED_DATA = {
             "id": "CP-003",
             "name": "Executive Grade Policy",
             "allowed_cabins": ["ECONOMY", "BUSINESS", "FIRST"],
-            "allowed_fare_classes": ["Y", "M", "K", "Q", "J", "C", "D", "G"],
+            "allowed_fare_classes": ["Y", "M", "K", "Q", "J", "C", "D", "F", "G"],
             "max_fare_inr": 9999999,
             "min_advance_days": 0,
             "preferred_airlines": ["AI", "EK", "QR", "SQ", "BA", "6E"],

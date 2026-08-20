@@ -72,7 +72,7 @@ This application runs entirely on zero-cost infrastructure and local resources:
 | **Neo4j AuraDB Free** | Cloud graph database | 200,000 nodes & 400,000 relationships | Free | [console.neo4j.io](https://console.neo4j.io/) |
 | **ChromaDB** | Fully local vector store | Unlimited storage | Free | Local (No key) |
 | **Hugging Face Hub** | Serverless inference API | ~1,000 queries per day (Meta-Llama-3-8B-Instruct) | Free | [huggingface.co](https://huggingface.co/) |
-| **Travel Developer Sandbox**| Dev Studio certification environment | Free sandbox testing | Free | [developer.travel.com](https://developer.travel.com/) |
+| **fast-flights** | Best-effort Google Flights comparison scraper | User-triggered demo searches | Free | No |
 | **Open-Meteo API** | Weather forecasting | Unlimited queries | Free | Local (No key) |
 
 > [!NOTE]
@@ -102,8 +102,9 @@ HUGGINGFACE_API_KEY=your_huggingface_token
 NEO4J_URI=neo4j+s://your_neo4j_db_id.databases.neo4j.io
 NEO4J_USERNAME=your_neo4j_username
 NEO4J_PASSWORD=your_neo4j_password
-TRAVEL_CLIENT_ID=your_travel_certification_client_id
-TRAVEL_CLIENT_SECRET=your_travel_certification_client_secret
+FLIGHT_DATA_MODE=google_flights
+ALLOW_MOCK_FLIGHT_FALLBACK=true
+FLIGHT_SEARCH_CACHE_SECONDS=600
 ```
 
 ### 3. Run TravelRoute v1 (Port 8000 & 5173)
@@ -154,7 +155,7 @@ TravelRoute v2 features smart compliance rules and weather integration driven by
 * **Live Travel Date Weather**: Integrates daily weather forecasts from Open-Meteo for the specific travel date offset, updating the surge multiplier for the date's forecast and displaying the weather directly alongside flight fares.
 * **LLM-Based Entity Parsing & City Resolution**: Uses the Hugging Face AI API (with local regex fallback) to semantically extract passenger names, dates, and bands, and automatically map full city names (e.g. "Bangalore" or "London") to IATA codes (e.g. `BLR` or `LHR`).
 * **Collapsible Compliance Checklist**: Displays clear checklist audit logs (with green `✓` or red `✗` indicators) inside a collapsible "Booking Proposal" panel to maximize viewport workspace.
-* **Fully Offline Flight Selection**: Completely deprecated and removed the third-party Kiwi API integration, routing all flight bookings through deterministic local simulated endpoints.
+* **Live Demo Flight Selection**: Retrieves current Google Flights comparison fares in INR through `fast-flights`, caches repeated searches for speed, links back to Google Flights for verification, and visibly labels estimated fallback fares when live retrieval is unavailable.
 
 ### Corporate Passenger Band Segmentation
 

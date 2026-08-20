@@ -1,105 +1,148 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
 const QUICK_QUERIES = [
-  { label: 'Book economy BOM→DXB tomorrow, policy CP-001', text: 'Book economy flight from BOM to DXB tomorrow for Aryan Mehta under policy CP-001' },
-  { label: 'Check waivers for Aryan Mehta, BOM→LHR next week', text: 'Check active waivers and book flight BOM to LHR next week for Aryan Mehta' },
-  { label: 'Business class DEL→JFK for Vikram Nair, CP-003', text: 'Book business class DEL to JFK for Vikram Nair under policy CP-003' },
-  { label: 'Emergency rebook BOM→SIN, weather disruption', text: 'Emergency booking BOM to SIN for Anita Singh, weather disruption active' }
+  { label: 'Grade 1 · Bombay to London', text: 'Bombay to London 21st August grade 1' },
+  { label: 'Grade 6 · Mumbai to Dubai', text: 'Mumbai to Dubai next week grade 6' },
+  { label: 'Grade 8 · Delhi to New York', text: 'Delhi to New York next week grade 8' },
+  { label: 'Grade 9 · First to London', text: 'First class Mumbai to London next week grade 9' },
 ];
 
-export default function QueryInput({ onSubmit, isLoading }) {
-  const [text, setText] = useState('');
-  const [passengerName, setPassengerName] = useState('Aryan Mehta');
+const GRADE_PATTERN = /\b(?:grade|band|level)\s*[-:]?\s*([1-9])\b/i;
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!text.trim() || isLoading) return;
-    onSubmit(text, passengerName);
+const gradeSummary = (grade) => {
+  if (grade <= 5) {
+    return { policy: 'CP-001', cabin: 'Economy', detail: 'Economy-only travel on every route' };
+  }
+  if (grade <= 7) {
+    return { policy: 'CP-002', cabin: 'Route-aware', detail: 'Business on long-haul; Economy otherwise' };
+  }
+  if (grade === 8) {
+    return { policy: 'CP-002', cabin: 'Business', detail: 'Economy or Business on every route' };
+  }
+  return { policy: 'CP-003', cabin: 'Executive', detail: 'Business default; First when requested' };
+};
+
+export default function QueryInput({ onSubmit, isLoading }) {
+  const [text, setText] = useState('Bombay to London 21st August grade 1');
+  const [passengerName, setPassengerName] = useState('Aryan Mehta');
+  const [grade, setGrade] = useState(1);
+  const policyPreview = useMemo(() => gradeSummary(grade), [grade]);
+
+  const updateText = (value) => {
+    setText(value);
+    const match = value.match(GRADE_PATTERN);
+    if (match) setGrade(Number(match[1]));
   };
 
-  const handleChipClick = (queryText) => {
-    setText(queryText);
-    
-    // Auto-extract passenger name from suggestion text if matching known names
-    const knownNames = ["Aryan Mehta", "Vikram Nair", "Anita Singh", "Priya Sharma", "Rajesh Kumar"];
-    for (const name of knownNames) {
-      if (queryText.includes(name)) {
-        setPassengerName(name);
-        break;
-      }
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!text.trim() || isLoading) return;
+    const normalizedQuery = GRADE_PATTERN.test(text) ? text.trim() : `${text.trim()} grade ${grade}`;
+    onSubmit(normalizedQuery, passengerName);
+  };
+
+  const handleGradeChange = (event) => {
+    const nextGrade = Number(event.target.value);
+    setGrade(nextGrade);
+    if (GRADE_PATTERN.test(text)) {
+      setText(text.replace(GRADE_PATTERN, `grade ${nextGrade}`));
     }
   };
 
   return (
-    <div className="bg-surface-raised shadow-md rounded-lg border border-border p-6 flex flex-col gap-4">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        {/* Large Input Textarea */}
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Describe the trip you want to book..."
-          rows={3}
-          disabled={isLoading}
-          className="w-full text-base font-normal text-text-primary placeholder-text-tertiary focus:outline-none resize-none disabled:bg-transparent"
-        />
+    <section className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-md">
+      <div className="border-b border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 px-5 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-accent">AI trip request</p>
+            <h2 className="mt-1 text-base font-bold tracking-tight text-text-primary">Describe the journey naturally</h2>
+            <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">City names, flexible dates, employee grade and cabin requests are resolved automatically.</p>
+          </div>
+          <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">Live fares</span>
+        </div>
+      </div>
 
-        {/* Passenger Name Input */}
-        <div className="flex flex-col gap-1 border-t border-border/40 pt-3">
-          <label className="text-[10px] uppercase font-bold text-text-secondary tracking-wider">Passenger Name</label>
-          <input
-            type="text"
-            value={passengerName}
-            onChange={(e) => setPassengerName(e.target.value)}
-            placeholder="E.g., Aryan Mehta, Vikram Nair, John Doe"
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-5">
+        <label className="flex flex-col gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Travel request</span>
+          <textarea
+            value={text}
+            onChange={(event) => updateText(event.target.value)}
+            placeholder="Example: Bombay to London 21st August grade 1"
+            rows={3}
             disabled={isLoading}
-            className="w-full text-xs font-semibold text-text-primary placeholder-text-tertiary focus:outline-none bg-transparent border-b border-border/80 pb-1 focus:border-accent transition-colors"
+            className="w-full resize-none rounded-xl border border-border-strong bg-surface/60 px-3.5 py-3 text-sm font-medium leading-relaxed text-text-primary shadow-inner transition focus:border-accent focus:bg-white focus:outline-none disabled:opacity-60"
           />
+        </label>
+
+        <div className="grid grid-cols-[minmax(0,1fr)_112px] gap-3">
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Traveler</span>
+            <input
+              type="text"
+              value={passengerName}
+              onChange={(event) => setPassengerName(event.target.value)}
+              placeholder="Passenger name"
+              disabled={isLoading}
+              className="min-w-0 rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-semibold text-text-primary transition focus:border-accent focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Grade</span>
+            <select
+              value={grade}
+              onChange={handleGradeChange}
+              disabled={isLoading}
+              className="rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-bold text-text-primary transition focus:border-accent focus:outline-none"
+            >
+              {Array.from({ length: 9 }, (_, index) => index + 1).map((value) => (
+                <option key={value} value={value}>Grade {value}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
-        {/* Quick Fill Chips */}
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[10px] uppercase font-semibold text-text-secondary tracking-wider">Suggested queries</span>
-          <div className="flex flex-wrap gap-1.5">
-            {QUICK_QUERIES.map((q, idx) => (
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md bg-indigo-600 px-2 py-1 text-[10px] font-extrabold text-white">GRADE {grade}</span>
+            <span className="text-xs font-bold text-indigo-950">{policyPreview.policy}</span>
+            <span className="text-[10px] font-semibold text-indigo-700">Recommended: {policyPreview.cabin}</span>
+          </div>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-indigo-700">{policyPreview.detail}. Explicit grades override saved traveler defaults.</p>
+        </div>
+
+        <div className="order-5">
+          <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Try an example</span>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {QUICK_QUERIES.map((query) => (
               <button
-                key={idx}
+                key={query.label}
                 type="button"
                 disabled={isLoading}
-                onClick={() => handleChipClick(q.text)}
-                className="bg-accent-light text-accent-text text-[11px] font-medium px-3 py-1 rounded-full border border-accent/10 hover:bg-accent hover:text-white transition-all duration-200 text-left"
+                onClick={() => updateText(query.text)}
+                className="rounded-full border border-border bg-white px-3 py-1.5 text-left text-[10px] font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-accent"
               >
-                {q.label}
+                {query.label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Bottom Actions Row */}
-        <div className="flex items-center justify-between border-t border-border pt-4 mt-2">
-          {/* Badge */}
-          <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border border-accent text-accent">
-            GraphRAG
+        <div className="order-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-1.5">
+            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-bold text-indigo-700">Hybrid GraphRAG</span>
+            <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-bold text-sky-700">Google Flights</span>
           </div>
-
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={isLoading || !text.trim()}
-            className={`flex items-center gap-2 bg-accent text-white px-5 py-2 text-sm font-semibold rounded-[10px] shadow-sm transition-all duration-200
-              ${(isLoading || !text.trim()) ? 'opacity-65 cursor-not-allowed' : 'hover:bg-accent-text'}`}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-200 transition hover:-translate-y-0.5 hover:bg-accent-text disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           >
-            {isLoading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-1 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Running agent...
-              </>
-            ) : 'Run agent'}
+            {isLoading && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+            {isLoading ? 'Resolving policy and fares…' : 'Find compliant flights'}
           </button>
         </div>
       </form>
-    </div>
+    </section>
   );
 }

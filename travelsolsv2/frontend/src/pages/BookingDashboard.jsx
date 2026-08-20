@@ -12,21 +12,21 @@ function BookingHistory({ bookings }) {
     <section className="bg-surface-raised shadow-sm rounded-2xl border border-border p-5 flex flex-col gap-3">
       <div className="flex items-center justify-between border-b border-border pb-3">
         <div>
-          <h2 className="text-xs uppercase font-extrabold tracking-wider text-text-secondary">Booked ticket history</h2>
+          <h2 className="text-xs uppercase font-extrabold tracking-wider text-text-secondary">Demo itinerary history</h2>
           <p className="text-[10px] text-text-tertiary">Session records synced to Neo4j</p>
         </div>
         <span className="text-[10px] bg-success-light text-success px-2.5 py-0.5 rounded-full font-bold border border-success/10">
-          {bookings.length} booked
+          {bookings.length} saved
         </span>
       </div>
       <div className="flex flex-col gap-2 max-h-[280px] overflow-y-auto pr-1">
         {bookings.length === 0 ? (
-          <div className="text-center py-6 text-xs text-text-secondary bg-surface rounded-xl border border-dashed border-border">No tickets booked yet in this session.</div>
+          <div className="text-center py-6 text-xs text-text-secondary bg-surface rounded-xl border border-dashed border-border">No demo itineraries saved yet in this session.</div>
         ) : bookings.map((booking, index) => (
           <article key={booking.pnr || index} className="bg-surface/50 border border-border rounded-xl p-3 flex flex-col gap-1.5 hover:border-accent/30 transition-colors shadow-sm">
             <div className="flex justify-between items-center gap-2 text-xs">
               <span className="font-bold text-text-primary truncate">{booking.passenger_name}</span>
-              <span className="shrink-0 bg-accent-light text-accent-text text-[9px] font-extrabold px-2 py-0.5 rounded-full font-mono border border-accent/10">PNR: {booking.pnr}</span>
+              <span className="shrink-0 bg-accent-light text-accent-text text-[9px] font-extrabold px-2 py-0.5 rounded-full font-mono border border-accent/10">REF: {booking.pnr}</span>
             </div>
             <div className="flex justify-between gap-2 text-[11px] text-text-secondary font-medium">
               <span>Flight {booking.flight_number} ({booking.fare_class})</span>
@@ -36,6 +36,29 @@ function BookingHistory({ bookings }) {
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function PolicyDecision({ context }) {
+  if (!context) return null;
+
+  const cabin = context.cabin_class?.replaceAll('_', ' ') || 'Pending';
+  return (
+    <section className="overflow-hidden rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-950 to-indigo-800 text-white shadow-lg shadow-indigo-100 animate-fade-in-up">
+      <div className="flex items-start justify-between gap-3 border-b border-white/10 px-4 py-3.5">
+        <div>
+          <p className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-indigo-200">Policy decision</p>
+          <h3 className="mt-1 text-sm font-bold">Grade {context.employee_grade} · {context.policy_id}</h3>
+        </div>
+        <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wide">{cabin}</span>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-white/10 bg-white/5">
+        <div className="px-3 py-2.5"><p className="text-[8px] uppercase text-indigo-300">Route</p><p className="mt-0.5 text-[11px] font-bold">{context.origin} → {context.destination}</p></div>
+        <div className="px-3 py-2.5"><p className="text-[8px] uppercase text-indigo-300">Travel date</p><p className="mt-0.5 text-[11px] font-bold">{context.travel_date}</p></div>
+        <div className="px-3 py-2.5"><p className="text-[8px] uppercase text-indigo-300">Lead time</p><p className="mt-0.5 text-[11px] font-bold">{context.min_advance_days ?? 0} days</p></div>
+      </div>
+      <p className="px-4 py-3 text-[10px] leading-relaxed text-indigo-100">{context.cabin_reason}</p>
     </section>
   );
 }
@@ -60,6 +83,7 @@ export default function BookingDashboard({
   flightOptions,
   selectedFlight,
   setSelectedFlight,
+  requestContext,
   bookings,
   runAgent,
   confirmBooking,
@@ -69,9 +93,9 @@ export default function BookingDashboard({
   const isBookingLoading = isLoading && steps.length > 0 && flightOptions.length > 0 && !proposal;
 
   useEffect(() => {
-    if (proposal || selectedFlight) setActivePanel('proposal');
+    if (proposal) setActivePanel('proposal');
     else if (flightOptions?.length > 0) setActivePanel('flights');
-  }, [flightOptions, proposal, selectedFlight]);
+  }, [flightOptions, proposal]);
 
   const workspaceTabs = [
     { id: 'trace', label: 'Agent trace', count: steps.length },
@@ -88,6 +112,7 @@ export default function BookingDashboard({
             <span className="hidden lg:inline-flex text-[10px] text-text-tertiary bg-surface border border-border rounded-full px-2 py-1">Drag divider to resize</span>
           </div>
           <QueryInput onSubmit={runAgent} isLoading={isLoading && steps.length === 0} />
+          <PolicyDecision context={requestContext} />
           {graphContext && <GraphContext context={graphContext} />}
           {vectorContext?.length > 0 && <VectorContext chunks={vectorContext} />}
           <BookingHistory bookings={bookings} />
@@ -113,7 +138,7 @@ export default function BookingDashboard({
 
           <div className="flex-1 min-h-0 p-4 sm:p-5 bg-surface/40">
             {activePanel === 'trace' && <AgentTrace steps={steps} isLoading={isLoading && flightOptions.length === 0} />}
-            {activePanel === 'flights' && (flightOptions?.length > 0 ? <div className="h-full overflow-y-auto rounded-xl border border-border bg-surface-raised p-4 shadow-sm"><FlightOptionsSelector options={flightOptions} selected={selectedFlight} onSelect={setSelectedFlight} /></div> : <EmptyWorkspace icon="✈" title="Flight options will appear here" description="Run a trip request to compare policy-compliant routes, fares, and airline choices." />)}
+            {activePanel === 'flights' && (flightOptions?.length > 0 ? <div className="h-full overflow-y-auto rounded-xl border border-border bg-surface-raised p-4 shadow-sm"><FlightOptionsSelector options={flightOptions} selected={selectedFlight} onSelect={(flight) => { setSelectedFlight(flight); setActivePanel('proposal'); }} /></div> : <EmptyWorkspace icon="✈" title="Flight options will appear here" description="Run a trip request to compare policy-compliant routes, fares, and airline choices." />)}
             {activePanel === 'proposal' && ((selectedFlight || proposal) ? <div className="h-full overflow-y-auto pr-1"><BookingProposal selectedFlight={selectedFlight} proposal={proposal} onConfirm={confirmBooking} onRevise={reset} isBookingLoading={isBookingLoading} /></div> : <EmptyWorkspace icon="✓" title="Proposal ready when you are" description="Choose a flight option to review price, policy compliance, and booking approval before confirmation." />)}
           </div>
         </section>

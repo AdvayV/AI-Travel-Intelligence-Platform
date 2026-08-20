@@ -375,7 +375,7 @@ def _get_mock_corporate_policy(policy_id: str) -> dict:
             "id": "CP-003",
             "name": "Executive Grade Policy",
             "allowed_cabins": ["ECONOMY", "BUSINESS", "FIRST"],
-            "allowed_fare_classes": ["Y", "M", "K", "Q", "J", "C", "D", "G"],
+            "allowed_fare_classes": ["Y", "M", "K", "Q", "J", "C", "D", "F", "G"],
             "max_fare_inr": 9999999,
             "min_advance_days": 0,
             "preferred_airlines": ["AI", "EK", "QR", "SQ", "BA", "6E"],

@@ -5,7 +5,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
 
   if (!selectedFlight && !proposal) return null;
 
-  // If already booked/ticketed (proposal exists with a PNR)
+  // If the demo itinerary has already been saved.
   if (proposal && proposal.pnr) {
     return (
       <div className="mt-4 border-t-2 border-emerald-500 bg-surface-raised shadow-lg rounded-b-lg p-5 animate-fade-in">
@@ -14,17 +14,23 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
             ✓
           </div>
           <div className="flex flex-col gap-1">
-            <h4 className="text-sm font-bold text-success">Booking Ticketed & Saved to Graph Database</h4>
+            <h4 className="text-sm font-bold text-success">Demo Itinerary Saved to Graph Database</h4>
             <p className="text-xs text-text-secondary max-w-sm">
-              The flight itinerary has been registered. Passenger Name Record (PNR) code generated successfully via Travel:
+              The selected itinerary has been registered for demonstration. No airline ticket has been issued:
             </p>
           </div>
           <span className="text-xl font-mono font-bold tracking-widest bg-success/10 text-success border border-success/20 px-6 py-2 rounded mt-2 select-all shadow-inner">
             {proposal.pnr}
           </span>
           <div className="text-[10px] text-text-tertiary mt-1 font-mono">
-            Transaction node saved to corporate Travel Graph (Neo4j AuraDB).
+            Demo reference saved to the corporate Travel Graph (Neo4j AuraDB).
           </div>
+          {proposal.notice && <p className="text-[10px] font-semibold text-amber-500">{proposal.notice}</p>}
+          {proposal.searchUrl && (
+            <a href={proposal.searchUrl} target="_blank" rel="noreferrer" className="text-xs font-bold text-accent hover:underline">
+              Verify fare on Google Flights ↗
+            </a>
+          )}
           <button
             onClick={onRevise}
             className="text-xs text-accent font-semibold hover:underline mt-3 px-4 py-1.5 border border-accent/20 rounded-full hover:bg-accent/5 transition-all duration-150"
@@ -36,7 +42,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
     );
   }
 
-  const { flight_number, airline, origin, destination, departure_time, fare_class, price_inr, original_price_inr, discount_applied, compliant, requires_approval, compliance_details } = selectedFlight;
+  const { flight_number, airline, airline_name, origin, destination, departure_time, fare_class, price_inr, original_price_inr, discount_applied, compliant, requires_approval, compliance_details } = selectedFlight;
 
   const getAirlineName = (code) => {
     const names = {
@@ -92,7 +98,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
           className="flex items-center justify-between cursor-pointer select-none pb-1 hover:opacity-90"
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-text-primary uppercase tracking-wider">Itinerary Booking Proposal</span>
+            <span className="text-sm font-bold text-text-primary uppercase tracking-wider">Itinerary review</span>
             <span className="text-[10px] text-accent font-semibold px-2 py-0.5 bg-accent/10 rounded">
               {isExpanded ? 'Collapse ▲' : 'Expand Details ▼'}
             </span>
@@ -130,7 +136,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
               <div className="flex flex-col gap-1">
                 <span className="text-xl font-extrabold text-accent tracking-wide">{origin} → {destination}</span>
                 <div className="flex items-center gap-2 text-xs text-text-secondary font-medium">
-                  <span>{getAirlineName(airline)} ({flight_number})</span>
+                  <span>{airline_name || getAirlineName(airline)} ({flight_number})</span>
                   <span className="w-1 h-1 bg-text-tertiary rounded-full" />
                   <span className="font-mono bg-surface border px-1.5 py-0.5 rounded font-bold text-[9px] text-text-secondary">
                     {fare_class}
@@ -150,9 +156,18 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
               )}
             </div>
 
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3.5">
+              <div className="grid grid-cols-3 gap-3">
+                <div><p className="text-[9px] font-bold uppercase tracking-wide text-indigo-500">Employee</p><p className="mt-1 text-xs font-extrabold text-indigo-950">Grade {selectedFlight.employee_grade}</p></div>
+                <div><p className="text-[9px] font-bold uppercase tracking-wide text-indigo-500">Policy</p><p className="mt-1 text-xs font-extrabold text-indigo-950">{selectedFlight.policy_id}</p></div>
+                <div><p className="text-[9px] font-bold uppercase tracking-wide text-indigo-500">Cabin</p><p className="mt-1 text-xs font-extrabold text-indigo-950">{fare_class}</p></div>
+              </div>
+              {selectedFlight.cabin_reason && <p className="mt-2 border-t border-indigo-100 pt-2 text-[10px] leading-relaxed text-indigo-700">{selectedFlight.cabin_reason}</p>}
+            </div>
+
             {/* Price Row */}
             <div className="flex items-center justify-between border-b border-border/60 pb-3.5">
-              <span className="text-xs text-text-secondary font-semibold">Total Ticket Fare</span>
+              <span className="text-xs text-text-secondary font-semibold">Observed Comparison Fare</span>
               <div className="flex flex-col items-end">
                 <span className="text-xl font-bold text-text-primary">INR {price_inr.toLocaleString()}</span>
                 {discountAmount > 0 && (
@@ -161,6 +176,16 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                   </span>
                 )}
               </div>
+            </div>
+
+            <div className={`rounded-lg border px-3.5 py-3 text-xs ${selectedFlight.is_live_price ? 'border-sky-500/20 bg-sky-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}>
+              <p className="font-bold text-text-primary">{selectedFlight.price_source || 'Unknown fare source'}</p>
+              <p className="mt-1 text-[10px] text-text-secondary">{selectedFlight.price_note || 'Verify the fare before booking.'}</p>
+              {selectedFlight.search_url && (
+                <a href={selectedFlight.search_url} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex text-[10px] font-bold text-accent hover:underline">
+                  Open matching Google Flights search ↗
+                </a>
+              )}
             </div>
 
             {/* Audit Details */}
@@ -200,7 +225,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                   disabled={isBookingLoading}
                   className="flex-1 bg-accent text-white py-2 px-4 rounded-[10px] text-sm font-semibold hover:bg-accent-text transition-all duration-150 shadow-sm disabled:opacity-50"
                 >
-                  {isBookingLoading ? 'Creating PNR...' : requires_approval ? 'Confirm with Exception & Request Approval' : 'Approve & Create PNR'}
+                  {isBookingLoading ? 'Saving demo itinerary...' : requires_approval ? 'Save Demo & Flag Approval' : 'Save Demo Itinerary'}
                 </button>
               ) : (
                 <button
@@ -208,7 +233,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                   disabled={isBookingLoading}
                   className="flex-1 bg-rose-600 text-white py-2 px-4 rounded-[10px] text-sm font-semibold hover:bg-rose-700 transition-all duration-150 shadow-sm disabled:opacity-50"
                 >
-                  {isBookingLoading ? 'Registering Override...' : 'Request Policy Override & Create PNR'}
+                  {isBookingLoading ? 'Saving demo override...' : 'Save Demo with Policy Override'}
                 </button>
               )}
               <button

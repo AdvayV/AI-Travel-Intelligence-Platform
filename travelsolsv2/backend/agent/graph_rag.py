@@ -3,6 +3,7 @@ import logging
 from tls_config import enable_system_trust_store
 from graph.neo4j_client import run_query, get_driver, get_route_info, get_active_waivers, get_corporate_policy
 from vector.chroma_client import ChromaClient
+from agent.policy_resolver import PASSENGER_GRADES, extract_employee_grade, policy_id_for_grade
 
 logger = logging.getLogger(__name__)
 enable_system_trust_store()
@@ -15,7 +16,7 @@ AIRPORTS = [
 ]
 AIRLINES = ["AI", "EK", "QR", "SQ", "BA", "6E"]
 PASSENGERS = ["Aryan Mehta", "Priya Sharma", "Rajesh Kumar", "Anita Singh", "Vikram Nair"]
-FARE_CLASSES = ["Y", "M", "K", "Q", "J", "C", "D", "G"]
+FARE_CLASSES = ["Y", "M", "K", "Q", "J", "C", "D", "F", "G"]
 
 CITY_TO_AIRPORT = {
     "mumbai": "BOM", "bombay": "BOM",
@@ -78,6 +79,9 @@ def extract_entities_with_llm(query: str) -> dict:
     import json
     from langchain_openai import ChatOpenAI
     
+    if os.getenv("AGENT_MODE", "deterministic").strip().lower() != "llm":
+        return {}
+
     hf_key = os.getenv("HUGGINGFACE_API_KEY")
     if not hf_key or hf_key == "your_huggingface_api_key_here":
         logger.info("HF API key not configured or placeholder. Skipping LLM entity extraction.")
@@ -131,7 +135,8 @@ def detect_entities(query: str) -> dict:
         "passengers": [],
         "policies": [],
         "fare_classes": [],
-        "waivers": []
+        "waivers": [],
+        "employee_grade": extract_employee_grade(query),
     }
     
     # 1. Try LLM semantic extraction first
@@ -327,18 +332,14 @@ def retrieve_context(query: str, passenger_name: str = None) -> dict:
     
     # STEP 2: Neo4j Traversal (or simulated traversal using mock helpers)
     # A) Passenger Query
-    passenger_bands = {
-        "Aryan Mehta": 7,
-        "Priya Sharma": 4,
-        "Rajesh Kumar": 8,
-        "Anita Singh": 3,
-        "Vikram Nair": 9
-    }
-    band_match = re.search(r"\b[Bb]and\s*([1-9])\b", query)
-    query_band = int(band_match.group(1)) if band_match else None
+    query_band = entities.get("employee_grade")
+    if query_band is not None:
+        entities["policies"] = [policy_id_for_grade(query_band)]
 
     for p_name in entities["passengers"]:
-        band = query_band if query_band is not None else passenger_bands.get(p_name, 5)
+        band = query_band if query_band is not None else PASSENGER_GRADES.get(p_name, 5)
+        p_id = policy_id_for_grade(band) if query_band is not None else None
+        p_tier = "Query grade override" if query_band is not None else "Standard"
         if not is_mock:
             p_res = run_query(
                 """
@@ -349,17 +350,22 @@ def retrieve_context(query: str, passenger_name: str = None) -> dict:
             )
             if p_res:
                 r = p_res[0]
-                graph_facts.append(f"Passenger {r['name']} holds tier {r['tier']}, is in Band {band}, and is subject to Corporate Policy {r['policy_id']} ({r['policy_name']}).")
+                p_id = p_id or r["policy_id"]
+                p_tier = r["tier"]
         else:
-            # Fallback mock fact
             policy_map = {"Aryan Mehta": "CP-001", "Priya Sharma": "CP-001", "Rajesh Kumar": "CP-002", "Anita Singh": "CP-001", "Vikram Nair": "CP-003"}
             tiers = {"Aryan Mehta": "Gold", "Priya Sharma": "Silver", "Rajesh Kumar": "Platinum", "Anita Singh": "Standard", "Vikram Nair": "Executive"}
-            p_id = policy_map.get(p_name, "CP-001")
-            p_tier = tiers.get(p_name, "Standard")
-            graph_facts.append(f"Passenger {p_name} holds tier {p_tier}, is in Band {band}, and is subject to Corporate Policy {p_id}.")
-            # Auto-inject the policy id to fetch its rules
-            if p_id not in entities["policies"]:
-                entities["policies"].append(p_id)
+            p_id = p_id or policy_map.get(p_name, "CP-001")
+            p_tier = tiers.get(p_name, "Standard") if query_band is None else p_tier
+
+        p_id = p_id or policy_id_for_grade(band)
+        override_note = " Explicit query grade takes precedence over the passenger default." if query_band is not None else ""
+        graph_facts.append(
+            f"Passenger {p_name} holds tier {p_tier}, is in Grade {band}, and is subject to "
+            f"Corporate Policy {p_id}.{override_note}"
+        )
+        if p_id not in entities["policies"]:
+            entities["policies"].append(p_id)
 
     # B) Policy Query
     for pol_id in entities["policies"]:
@@ -417,13 +423,13 @@ def retrieve_context(query: str, passenger_name: str = None) -> dict:
             if fc_res:
                 graph_facts.append(f"Fare Class {fc} ({fc_res[0]['name']}) details: Change fee = INR {fc_res[0]['fee']:,}; Refund = {fc_res[0]['refund']}% of base fare.")
         else:
-            fees = {"Y": 8000, "M": 5000, "K": 3000, "Q": 999999, "J": 0, "C": 15000, "D": 25000, "G": 10000}
-            refunds = {"Y": 75, "M": 50, "K": 0, "Q": 0, "J": 100, "C": 80, "D": 0, "G": 25}
-            names = {"Y": "Full Economy", "M": "Semi-restricted economy", "K": "Restricted economy", "Q": "Deep discount", "J": "Full Business", "C": "Semi-restricted business", "D": "Discounted business", "G": "Group fare"}
+            fees = {"Y": 8000, "M": 5000, "K": 3000, "Q": 999999, "J": 0, "C": 15000, "D": 25000, "F": 0, "G": 10000}
+            refunds = {"Y": 75, "M": 50, "K": 0, "Q": 0, "J": 100, "C": 80, "D": 0, "F": 100, "G": 25}
+            names = {"Y": "Full Economy", "M": "Semi-restricted economy", "K": "Restricted economy", "Q": "Deep discount", "J": "Full Business", "C": "Semi-restricted business", "D": "Discounted business", "F": "Full First", "G": "Group fare"}
             graph_facts.append(f"Fare Class {fc} ({names.get(fc)}) details: Change fee = INR {fees.get(fc, 0):,}; Refund = {refunds.get(fc, 0)}% of base fare.")
 
     # E-2) PDF Policy Document nodes from Neo4j (if ingested)
-    policy_keywords = ["policy", "rule", "compliance", "approval", "travel", "booking", "advance", "cabin", "fare"]
+    policy_keywords = ["policy", "rule", "compliance", "approval", "travel", "booking", "advance", "cabin", "fare", "grade", "band", "level"]
     if any(kw in query.lower() for kw in policy_keywords):
         try:
             if not is_mock:

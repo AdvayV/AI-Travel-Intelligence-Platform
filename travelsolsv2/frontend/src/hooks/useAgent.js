@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function useAgent() {
   const [query, setQuery] = useState('');
@@ -10,12 +10,11 @@ export default function useAgent() {
   const [error, setError] = useState(null);
   const [flightOptions, setFlightOptions] = useState([]);
   const [selectedFlight, setSelectedFlight] = useState(null);
+  const [requestContext, setRequestContext] = useState(null);
   const [bookings, setBookings] = useState([]);
   
   const [passengerName, setPassengerName] = useState('Aryan Mehta');
   
-  const timerRef = useRef([]);
-
   const fetchBookings = async () => {
     try {
       const response = await fetch('/api/booking/history');
@@ -33,11 +32,6 @@ export default function useAgent() {
   }, []);
 
   const reset = () => {
-    // Clear any active timers
-    timerRef.current.forEach(clearTimeout);
-    timerRef.current = [];
-
-    
     setSteps([]);
     setGraphContext(null);
     setVectorContext([]);
@@ -45,6 +39,7 @@ export default function useAgent() {
     setError(null);
     setFlightOptions([]);
     setSelectedFlight(null);
+    setRequestContext(null);
   };
 
   const runAgent = async (queryText, pName) => {
@@ -68,6 +63,7 @@ export default function useAgent() {
       }
 
       const data = await response.json();
+      setRequestContext(data.request_context || null);
       
       // Immediately set the contexts so they are visible right away
       if (data.graph_context) {
@@ -77,53 +73,22 @@ export default function useAgent() {
         }
       }
 
-      // Animate steps appearing sequentially with 450ms delay between each
       const rawSteps = data.steps || [];
-      
-      rawSteps.forEach((step, index) => {
-        const t = setTimeout(() => {
-          setSteps(prev => [...prev, step]);
-          
-          // If this is the last step, render the final conclusion and proposal
-          if (index === rawSteps.length - 1) {
-            setSteps(prev => [
-              ...prev,
-              {
-                tool_name: 'conclusion',
-                tool_input: 'final_answer',
-                tool_output: data.answer
-              }
-            ]);
-            
-            if (data.flight_options && data.flight_options.length > 0) {
-              setFlightOptions(data.flight_options);
-              const firstCompliant = data.flight_options.find(f => f.compliant && !f.requires_approval);
-              setSelectedFlight(firstCompliant || data.flight_options[0]);
-            }
-            
-            setIsLoading(false);
-          }
-        }, (index + 1) * 450);
-        
-        timerRef.current.push(t);
-      });
-      
-      // If there are NO intermediate steps, show conclusion immediately
-      if (rawSteps.length === 0) {
-        setSteps([
-          {
-            tool_name: 'conclusion',
-            tool_input: 'final_answer',
-            tool_output: data.answer
-          }
-        ]);
-        if (data.flight_options && data.flight_options.length > 0) {
-          setFlightOptions(data.flight_options);
-          const firstCompliant = data.flight_options.find(f => f.compliant && !f.requires_approval);
-          setSelectedFlight(firstCompliant || data.flight_options[0]);
+      setSteps([
+        ...rawSteps,
+        {
+          tool_name: 'conclusion',
+          tool_input: 'final_answer',
+          tool_output: data.answer
         }
-        setIsLoading(false);
+      ]);
+
+      if (data.flight_options && data.flight_options.length > 0) {
+        setFlightOptions(data.flight_options);
+        const firstCompliant = data.flight_options.find(f => f.compliant && !f.requires_approval);
+        setSelectedFlight(firstCompliant || data.flight_options[0]);
       }
+      setIsLoading(false);
 
     } catch (err) {
       console.error(err);
@@ -173,7 +138,13 @@ export default function useAgent() {
         price: selectedFlight.price_inr,
         compliant: selectedFlight.compliant,
         discountApplied: selectedFlight.discount_applied,
-        rawAnswer: `PNR registration complete: ${booking.pnr}`
+        priceSource: selectedFlight.price_source,
+        isLivePrice: selectedFlight.is_live_price,
+        searchUrl: selectedFlight.search_url,
+        observedAt: selectedFlight.observed_at,
+        isDemo: booking.is_demo,
+        notice: booking.notice,
+        rawAnswer: `Demo itinerary reference created: ${booking.pnr}`
       });
       
       // Refresh booking history
@@ -198,6 +169,7 @@ export default function useAgent() {
     flightOptions,
     selectedFlight,
     setSelectedFlight,
+    requestContext,
     bookings,
     runAgent,
     confirmBooking,

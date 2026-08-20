@@ -44,7 +44,7 @@ export default function AgentTrace({ steps, isLoading }) {
           bg: 'bg-emerald-50 text-emerald-700 border-emerald-100',
           dot: 'bg-emerald-500',
           icon: '💾',
-          label: 'PNR Registry Creation'
+          label: 'Demo Itinerary Save'
         };
       case 'conclusion':
         return {

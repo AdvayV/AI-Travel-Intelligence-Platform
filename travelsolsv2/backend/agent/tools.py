@@ -101,13 +101,15 @@ def check_policy_compliance_tool(input_str: str) -> str:
         
     violations = []
     
-    # Map input class to standard display names: "Economy" or "Business"
     if fare_class_input.upper() in ["Y", "M", "K", "Q", "ECONOMY", "ECON"]:
         display_class = "Economy"
         raw_code = "Y"
     elif fare_class_input.upper() in ["J", "C", "D", "BUSINESS", "BIZ"]:
         display_class = "Business"
         raw_code = "J"
+    elif fare_class_input.upper() in ["F", "FIRST", "FIRST CLASS"]:
+        display_class = "First"
+        raw_code = "F"
     else:
         display_class = fare_class_input
         raw_code = fare_class_input
@@ -119,6 +121,8 @@ def check_policy_compliance_tool(input_str: str) -> str:
     for code in allowed_fare_classes:
         if code in ["J", "C", "D"]:
             allowed_display_classes.add("Business")
+        elif code == "F":
+            allowed_display_classes.add("First")
         else:
             allowed_display_classes.add("Economy")
             
@@ -296,7 +300,7 @@ def create_pnr_tool(input_str: str) -> str:
         fare_class = "Business"
         
     try:
-        # Create PNR via Travel endpoint / mock
+        # Create a non-ticketing demo itinerary reference.
         booking_res = create_pnr_api(passenger_name, flight_number, origin, destination, date_str, fare_class, price)
         pnr = booking_res.get("pnr")
         
@@ -304,7 +308,7 @@ def create_pnr_tool(input_str: str) -> str:
         write_booking(booking_res)
         
         return (
-            f"SUCCESS: PNR created successfully! PNR Code: {pnr}. "
+            f"SUCCESS: Demo itinerary reference created! Reference: {pnr}. "
             f"Passenger: {passenger_name} | Flight: {flight_number} | Sector: {origin}->{destination} on {date_str} | "
             f"Fare Class: {fare_class} | Price: INR {price:,} | Booking engine source: {booking_res.get('source')}."
         )
@@ -333,9 +337,4 @@ ALL_TOOLS = [
         func=check_policy_compliance_tool,
         description="Check if a proposed booking complies with corporate travel policies. Input: policy_id, fare_class, total_fare, advance_days, airline_code. Example: CP-001, Economy, 32000, 5, AI"
     ),
-    Tool(
-        name="create_pnr",
-        func=create_pnr_tool,
-        description="Create a passenger name record (PNR) booking. Use ONLY after verifying weather, waivers, flight options, and policy compliance. Input: passenger_name, flight_number, origin, destination, date, fare_class, price. Example: Aryan Mehta, AI-201, BOM, DXB, 2026-06-25, Economy, 32000"
-    )
 ]

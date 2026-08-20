@@ -14,6 +14,7 @@ Use this document to validate the autonomous booking agent's audit outputs.
 - Allowed Cabins: ECONOMY Only
 - Allowed Fare Classes: Y, M, K, Q
 - Lead Time Rule: Must book at least 7 days in advance
+- Last-Minute Workflow: Bookings inside the lead-time target require documented business justification and VP approval
 - Maximum Fare Limit: INR 150,000
 - Pre-Approval Threshold: Required for any ticket above INR 100,000
 - Preferred Airlines: Air India (AI), IndiGo (6E)
@@ -34,7 +35,7 @@ Use this document to validate the autonomous booking agent's audit outputs.
 - Name: Executive Grade Policy
 - Grade Assignment: Executive Officers (Band 9)
 - Allowed Cabins: ECONOMY, BUSINESS, FIRST
-- Allowed Fare Classes: Y, M, K, Q, J, C, D, G
+- Allowed Fare Classes: Y, M, K, Q, J, C, D, F, G
 - Lead Time Rule: 0 days advance required (Same-day booking allowed)
 - Maximum Fare Limit: Unlimited (No maximum fare cap)
 - Pre-Approval Threshold: No approval threshold (automatic credit card clearing)
