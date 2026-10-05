@@ -1,3 +1,4 @@
+import network_config  # noqa: F401
 import httpx
 import logging
 import time
@@ -6,6 +7,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 AIRPORT_COORDS = {
+    "AUH": (24.4330, 54.6511), "HND": (35.5494, 139.7798), "TPE": (25.0777, 121.2328),
     "DXB": (25.2532, 55.3657), "LHR": (51.4700, -0.4543), "SIN": (1.3644, 103.9915),
     "BKK": (13.6900, 100.7501), "JFK": (40.6413, -73.7781), "DOH": (25.2730, 51.6080),
     "KUL": (2.7456, 101.7099), "NRT": (35.7647, 140.3863), "CDG": (49.0097, 2.5479),
@@ -49,11 +51,9 @@ def _wmo_info(code: int) -> tuple[str, float, str]:
             return info
     return ("Unknown", 1.0, "🌡")
 
-# Two-tier cache: score-only (light) + full detail (heavy)
-_SCORE_CACHE: dict = {}   # code → {score, expires_at}
+# In-memory detail cache shared by ranking, pricing, and the UI.
 _DETAIL_CACHE: dict = {}  # code → {full weather dict, expires_at}
 
-_SCORE_TTL  = 3600    # 1 hour for scoring pipeline
 _DETAIL_TTL = 1800    # 30 min for the live detail panel
 
 
@@ -78,62 +78,6 @@ def _fetch_raw(lat: float, lon: float, days: int = 7) -> dict | None:
         return None
 
 
-def get_weather_score(dest_codes: list[str]) -> dict[str, float]:
-    """
-    Lightweight scoring call used by the pipeline.
-    Returns {code: float 0-1} for each destination.
-    Uses 7-day window for speed.
-    """
-    scores: dict[str, float] = {}
-    now = time.time()
-
-    for code in dest_codes:
-        # Cache hit
-        if code in _SCORE_CACHE and now < _SCORE_CACHE[code]["expires_at"]:
-            scores[code] = _SCORE_CACHE[code]["score"]
-            continue
-
-        if code not in AIRPORT_COORDS:
-            scores[code] = 0.5
-            continue
-
-        lat, lon = AIRPORT_COORDS[code]
-        daily = _fetch_raw(lat, lon, days=7)
-
-        if not daily:
-            scores[code] = 0.5
-            continue
-
-        wmo_codes = daily.get("weather_code", [])
-        temp_maxes = daily.get("temperature_2m_max", [])
-        days_count = min(7, len(wmo_codes))
-
-        if days_count == 0:
-            scores[code] = 0.5
-            continue
-
-        points = 0.0
-        for i in range(days_count):
-            wc = int(wmo_codes[i] or 0)
-            tmax = temp_maxes[i]
-            _, mult, _ = _wmo_info(wc)
-            points += mult  # 0.30–1.25 per day
-
-            # Temperature bonus: ideal travel temp 18–30°C
-            if tmax is not None:
-                if 18 <= tmax <= 30:
-                    points += 0.25
-                elif tmax > 38 or tmax < 5:
-                    points -= 0.30
-
-        max_possible = days_count * (1.25 + 0.25)  # max points per day
-        score = max(0.0, min(1.0, points / max_possible))
-        scores[code] = round(score, 3)
-        _SCORE_CACHE[code] = {"score": score, "expires_at": now + _SCORE_TTL}
-
-    return scores
-
-
 def get_weather_detail(dest_code: str) -> dict:
     """
     Full weather detail for the forecast panel — temperatures in °C,
@@ -153,7 +97,9 @@ def get_weather_detail(dest_code: str) -> dict:
     daily = _fetch_raw(lat, lon, days=14)
 
     if not daily:
-        return _make_unknown_detail(dest_code)
+        result = _make_unknown_detail(dest_code)
+        _DETAIL_CACHE[dest_code] = {"data": result, "expires_at": now + 300}
+        return result
 
     dates       = daily.get("time", [])
     wmo_codes   = daily.get("weather_code", [])
@@ -184,12 +130,13 @@ def get_weather_detail(dest_code: str) -> dict:
             elif tmax > 38 or tmax < 5:
                 temp_bonus = -0.25
 
-        day_appeal = min(1.0, max(0.0, appeal_mult + temp_bonus))
+        day_appeal = min(1.0, max(0.0, (appeal_mult + temp_bonus) / 1.45))
         total_appeal += day_appeal
 
         days_data.append({
             "date":           dates[i] if i < len(dates) else "",
             "wmo_code":       wc,
+            "weather_code":   wc,
             "condition":      label,
             "emoji":          emoji,
             "temp_max_c":     tmax,
@@ -209,7 +156,8 @@ def get_weather_detail(dest_code: str) -> dict:
     _, _, today_emoji = _wmo_info(today.get("wmo_code", 0))
 
     # Travel comfort summary
-    avg_max = sum(d["temp_max_c"] for d in days_data if d["temp_max_c"] is not None) / max(1, n)
+    temperatures = [d["temp_max_c"] for d in days_data if d["temp_max_c"] is not None]
+    avg_max = sum(temperatures) / len(temperatures) if temperatures else None
     if overall_appeal >= 0.85:
         comfort_label = "Excellent for travel ✈️"
     elif overall_appeal >= 0.70:
@@ -226,7 +174,7 @@ def get_weather_detail(dest_code: str) -> dict:
         "overall_appeal":   overall_appeal,
         "comfort_label":    comfort_label,
         "today_emoji":      today_emoji,
-        "avg_temp_max_c":   round(avg_max, 1),
+        "avg_temp_max_c":   round(avg_max, 1) if avg_max is not None else None,
         "today_temp_max_c": today.get("temp_max_c"),
         "today_temp_min_c": today.get("temp_min_c"),
         "today_condition":  today.get("condition", "Unknown"),
@@ -257,3 +205,8 @@ def _make_unknown_detail(code: str) -> dict:
         "fetched_at":      datetime.now(timezone.utc).isoformat(),
         "source":          "unavailable",
     }
+
+
+def get_weather_score(dest_codes):
+    """Use the same normalized appeal as the daily UI and pricing."""
+    return {code: get_weather_detail(code.upper())["overall_appeal"] for code in dest_codes}

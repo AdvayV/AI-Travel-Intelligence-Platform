@@ -14,6 +14,9 @@ import time
 import logging
 import random
 import hashlib
+import network_config  # noqa: F401
+
+STATUS = {"status": "not_checked", "error": None}
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ CITY_ALIASES = {
     "YYZ": "Toronto flights",
     "MEL": "Melbourne flights",
     "SFO": "San Francisco flights",
-    "CGK": "Bali flights",
+    "CGK": "Jakarta flights",
     "MNL": "Manila flights",
     "SGN": "Ho Chi Minh flights",
     "CMB": "Colombo flights",
@@ -97,6 +100,7 @@ def _fetch_single(pytrends, code: str) -> float | None:
         )
         df = pytrends.interest_over_time()
         if df.empty or keyword not in df.columns:
+            STATUS.update(status="fallback", error="no_data")
             return None
 
         avg = float(df[keyword].mean())
@@ -104,6 +108,7 @@ def _fetch_single(pytrends, code: str) -> float | None:
         return round(min(1.0, avg / 100.0), 3)
 
     except Exception as e:
+        STATUS.update(status="fallback", error=type(e).__name__)
         logger.debug(f"pytrends inner error for {code}: {type(e).__name__}: {e}")
         return None
 
@@ -140,13 +145,14 @@ def get_trend_scores(dest_codes: list[str]) -> dict[str, float]:
             hl="en-IN",
             tz=330,
             timeout=(8, 15),
-            retries=2,
-            backoff_factor=1.0,
+            retries=0,
         )
         pytrends_available = True
     except ImportError:
+        STATUS.update(status="fallback", error="pytrends_not_installed")
         logger.warning("pytrends not installed — using deterministic fallback scores.")
     except Exception as e:
+        STATUS.update(status="fallback", error=type(e).__name__)
         logger.warning(f"pytrends init failed: {e} — using fallback.")
 
     for code in uncached:
@@ -163,12 +169,20 @@ def get_trend_scores(dest_codes: list[str]) -> dict[str, float]:
                 pytrends_available = False
                 logger.info(f"Google Trends fetch failed for {code}. Bypassing pytrends for remaining uncached destinations to prevent delay.")
 
+        source = "live" if score is not None else "fallback"
+        if source == "live":
+            STATUS.update(status="live", error=None)
         # Still None → use deterministic fallback
         if score is None:
             score = _deterministic_fallback(code)
             logger.debug(f"Using fallback trend score for {code}: {score}")
 
         scores[code] = score
-        _TRENDS_CACHE[code] = {"score": score, "expires_at": now + _TRENDS_TTL}
+        _TRENDS_CACHE[code] = {"score": score, "source": source, "expires_at": now + (_TRENDS_TTL if source == "live" else 300)}
 
     return scores
+
+
+def get_trend_metadata(code):
+    return {"source": _TRENDS_CACHE.get(code, {}).get("source", "unavailable"),
+            "note": "Relative interest within each keyword, not comparable absolute search volume."}

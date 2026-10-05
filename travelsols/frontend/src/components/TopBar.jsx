@@ -1,75 +1,15 @@
-import React, { useState } from 'react';
-
-function TierPill({ label, count, bg, border, color }) {
-  if (!count) return null;
-  return (
-    <div style={{ background: bg, border: `1px solid ${border}`, color, padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' }}>
-      {label}: {count}
+import Icon from './Icon';
+export default function TopBar({ tab, setTab, refreshing, refresh, health }) {
+  const stamp = health?.last_refresh ? new Date(health.last_refresh).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : null;
+  return <header className="topbar">
+    <a className="brand" href="/" aria-label="TravelSols home"><span className="brand-mark"><Icon name="plane" size={21}/></span><span>travelsols<span className="brand-version">Workspace / v1</span></span></a>
+    <nav className="primary-nav" aria-label="Workspace navigation">
+      <button className={tab==='routes'?'active':''} onClick={()=>setTab('routes')}><Icon name="grid"/>Route intelligence</button>
+      <button className={tab==='integrations'?'active':''} onClick={()=>setTab('integrations')}><Icon name="activity"/>Integrations</button>
+    </nav>
+    <div className="top-actions"><span className="sync-label">{refreshing ? 'Updating signals…' : stamp ? 'Updated '+stamp : 'Connecting…'}</span>
+      <button className="button secondary small" onClick={refresh} disabled={refreshing}><Icon name="refresh" className={refreshing?'spin':''}/><span>{refreshing?'Refreshing':'Refresh data'}</span></button>
+      <span className="avatar" title="Local workspace">TS</span>
     </div>
-  );
+  </header>;
 }
-
-function TopBar({ hotCount, risingCount, platinumCount, coldCount, lastRefresh, onRefresh }) {
-  const [refreshing, setRefreshing] = useState(false);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      const res = await fetch('/api/refresh', { method: 'POST' });
-      if (res.ok) {
-        setTimeout(() => { onRefresh(); setRefreshing(false); }, 4000);
-      }
-    } catch (e) {
-      console.error(e);
-      setRefreshing(false);
-    }
-  };
-
-  return (
-    <div style={{
-      background: '#0D1428',
-      borderBottom: '1px solid #1E2D4A',
-      padding: '10px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      flexWrap: 'wrap',
-      gap: '10px',
-    }}>
-      <div>
-        <h1 style={{ margin: 0, fontSize: '18px', color: '#FFFFFF', letterSpacing: '-0.3px' }}>Route Intelligence</h1>
-        <div style={{ color: '#4A9EFF', fontSize: '12px' }}>Demand Forecasting · Surge Engine v2</div>
-      </div>
-
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <TierPill label="💎 PLAT"   count={platinumCount} bg="#A855F720" border="#A855F7" color="#A855F7" />
-        <TierPill label="🔥 HOT"    count={hotCount}      bg="#FF3B3B20" border="#FF3B3B" color="#FF3B3B" />
-        <TierPill label="📈 RISING" count={risingCount}   bg="#FF9B0020" border="#FF9B00" color="#FF9B00" />
-        <TierPill label="❄️ COLD"   count={coldCount}     bg="#6B7FA320" border="#6B7FA3" color="#6B7FA3" />
-        <div style={{ color: '#4A6080', fontSize: '12px' }}>
-          {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString()}` : 'Loading…'}
-        </div>
-      </div>
-
-      <button
-        onClick={handleRefresh}
-        disabled={refreshing}
-        style={{
-          background: refreshing ? '#1E2D4A' : 'linear-gradient(135deg, #4A9EFF, #7C5CFC)',
-          color: 'white',
-          border: 'none',
-          padding: '8px 18px',
-          borderRadius: '8px',
-          cursor: refreshing ? 'wait' : 'pointer',
-          fontWeight: 'bold',
-          fontSize: '13px',
-          transition: 'opacity 0.2s',
-        }}
-      >
-        {refreshing ? '⏳ Refreshing…' : '⟳ Refresh'}
-      </button>
-    </div>
-  );
-}
-
-export default TopBar;

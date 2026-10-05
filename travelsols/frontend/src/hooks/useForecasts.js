@@ -1,35 +1,46 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
-function useForecasts(selectedOrigin) {
+export default function useForecasts(origin) {
   const [forecasts, setForecasts] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [health, setHealth] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [lastRefresh, setLastRefresh] = useState(null);
-
-  const fetchForecasts = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/forecasts?origin=${selectedOrigin}&limit=25`);
-      if (!res.ok) throw new Error('Failed to fetch forecasts');
-      const data = await res.json();
-      setForecasts(data);
-      setLastRefresh(new Date());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  const [refreshRequested, setRefreshRequested] = useState(false);
+  const generation = useRef(0);
   useEffect(() => {
-    fetchForecasts();
-    
-    const interval = setInterval(fetchForecasts, 300000);
-    return () => clearInterval(interval);
-  }, [selectedOrigin]);
+    const current = ++generation.current;
+    const controller = new AbortController();
+    let timer;
+    setLoading(true); setForecasts([]); setError(null);
+    async function poll() {
+      try {
+        const responses = await Promise.all([
+          fetch('/api/health', { signal: controller.signal }),
+          fetch('/api/forecasts?origin=' + origin + '&limit=100', { signal: controller.signal }),
+        ]);
+        if (responses.some(r => !r.ok)) throw new Error('Cannot reach the route service. Check that the backend is running on port 8000.');
+        const [status, routes] = await Promise.all(responses.map(r => r.json()));
+        if (current !== generation.current) return;
+        setHealth(status); setForecasts(routes); setError(null); setLoading(false);
+        if (!status.refresh?.running) setRefreshRequested(false);
+        timer = setTimeout(poll, status.refresh?.running || !routes.length ? 2500 : 15000);
+      } catch (e) {
+        if (e.name === 'AbortError' || current !== generation.current) return;
+        setError(e.message); setLoading(false); setRefreshRequested(false);
+        timer = setTimeout(poll, 5000);
+      }
+    }
+    poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [origin]);
 
-  return { forecasts, loading, error, lastRefresh, refetch: fetchForecasts };
+  const refresh = useCallback(async () => {
+    setRefreshRequested(true); setError(null);
+    try {
+      const response = await fetch('/api/refresh', { method: 'POST' });
+      if (!response.ok) throw new Error('Refresh could not be started. Please retry.');
+      setHealth(h => h ? { ...h, refresh: { ...h.refresh, running: true } } : h);
+    } catch (e) { setError(e.message); setRefreshRequested(false); }
+  }, []);
+  return { forecasts, health, loading, error, refresh, refreshing: refreshRequested || health?.refresh?.running };
 }
-
-export default useForecasts;
