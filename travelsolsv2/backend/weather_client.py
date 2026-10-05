@@ -1,10 +1,17 @@
-import httpx
+"""One shared weather feed, with TLS verification, single-flight and disk cache."""
+import json
 import logging
+import math
+import os
+import threading
 import time
+from pathlib import Path
 from datetime import datetime, timezone
+from tls_config import enable_system_trust_store
+enable_system_trust_store()
+import httpx
 
 logger = logging.getLogger(__name__)
-
 AIRPORT_COORDS = {
     "DXB": (25.2532, 55.3657), "LHR": (51.4700, -0.4543), "SIN": (1.3644, 103.9915),
     "BKK": (13.6900, 100.7501), "JFK": (40.6413, -73.7781), "DOH": (25.2730, 51.6080),
@@ -25,235 +32,146 @@ AIRPORT_COORDS = {
     "BNE": (-27.3842, 153.1175), "AKL": (-37.0082, 174.7850), "PER": (-31.9385, 115.9672),
     "YYZ": (43.6777, -79.6248), "JED": (21.6796, 39.1565)
 }
+AIRPORT_COORDS.update({"HND":(35.5494,139.7798),"TPE":(25.0777,121.2328),"AUH":(24.4330,54.6511)})
+CACHE_DIR = Path(__file__).parent/".cache"/"weather"
+_DETAIL_CACHE = {}
+_DETAIL_TTL = 1800
+_FAILURE_TTL = 300
+_STALE_TTL = 21600
+_locks = {code:threading.Lock() for code in AIRPORT_COORDS}
+STATUS = {"status":"not_checked","last_error":None,"provider":"Open-Meteo"}
 
-# WMO weather code → (label, travel appeal multiplier, emoji)
-WMO_LOOKUP = {
-    range(0, 1):   ("Clear Sky",        1.25, "☀️"),
-    range(1, 3):   ("Mostly Clear",     1.20, "🌤"),
-    range(3, 4):   ("Overcast",         1.00, "☁️"),
-    range(45, 50): ("Fog",              0.80, "🌫"),
-    range(51, 56): ("Light Drizzle",    0.75, "🌦"),
-    range(56, 68): ("Heavy Drizzle",    0.65, "🌧"),
-    range(71, 78): ("Snow",             0.50, "❄️"),
-    range(80, 83): ("Rain Showers",     0.70, "🌧"),
-    range(85, 87): ("Snow Showers",     0.45, "🌨"),
-    range(95, 96): ("Thunderstorm",     0.35, "⛈"),
-    range(96, 100):("Heavy Thunderstorm", 0.30, "⛈"),
+WMO = {
+    0:("Clear sky",1),1:("Mainly clear",.95),2:("Partly cloudy",.9),3:("Overcast",.75),
+    45:("Fog",.45),48:("Rime fog",.4),51:("Light drizzle",.65),53:("Drizzle",.55),55:("Heavy drizzle",.4),
+    56:("Freezing drizzle",.3),57:("Heavy freezing drizzle",.2),
+    61:("Light rain",.6),63:("Rain",.45),65:("Heavy rain",.25),66:("Freezing rain",.25),67:("Heavy freezing rain",.15),
+    71:("Light snow",.5),73:("Snow",.35),75:("Heavy snow",.2),77:("Snow grains",.4),
+    80:("Light rain showers",.55),81:("Rain showers",.4),82:("Heavy rain showers",.2),
+    85:("Snow showers",.3),86:("Heavy snow showers",.15),95:("Thunderstorm",.15),
+    96:("Thunderstorm with hail",.1),99:("Severe thunderstorm with hail",.05),
 }
 
-def _wmo_info(code: int) -> tuple[str, float, str]:
-    """Return (label, multiplier, emoji) for a WMO weather code."""
-    code = int(code or 0)
-    for r, info in WMO_LOOKUP.items():
-        if code in r:
-            return info
-    return ("Unknown", 1.0, "🌡")
-
-# Two-tier cache: score-only (light) + full detail (heavy)
-_SCORE_CACHE: dict = {}   # code → {score, expires_at}
-_DETAIL_CACHE: dict = {}  # code → {full weather dict, expires_at}
-
-_SCORE_TTL  = 3600    # 1 hour for scoring pipeline
-_DETAIL_TTL = 1800    # 30 min for the live detail panel
-
-
-def _fetch_raw(lat: float, lon: float, days: int = 7) -> dict | None:
-    """Fetch raw Open-Meteo daily data. Returns the 'daily' dict or None on failure."""
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,"
-        f"weather_code,precipitation_probability_max,windspeed_10m_max"
-        f"&forecast_days={days}"
-        f"&timezone=auto"
-        f"&wind_speed_unit=kmh"
-    )
+def _number(value):
     try:
-        resp = httpx.get(url, timeout=12)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("daily", {})
-    except Exception as e:
-        logger.warning(f"Open-Meteo fetch failed: {e}")
+        number=float(value)
+        return number if math.isfinite(number) else None
+    except (ValueError,TypeError): return None
+
+def _value(daily,key,index):
+    values=daily.get(key,[])
+    return _number(values[index]) if index<len(values) else None
+
+def normalize_daily(daily):
+    days=[]
+    for i,day_date in enumerate(daily.get("time",[])[:14]):
+        try: datetime.strptime(day_date,"%Y-%m-%d")
+        except (ValueError,TypeError): continue
+        code=_value(daily,"weather_code",i)
+        code=int(code) if code is not None else None
+        high=_value(daily,"temperature_2m_max",i)
+        low=_value(daily,"temperature_2m_min",i)
+        rain=_value(daily,"precipitation_sum",i)
+        probability=_value(daily,"precipitation_probability_max",i)
+        wind=_value(daily,"wind_speed_10m_max",i)
+        if wind is None: wind=_value(daily,"windspeed_10m_max",i)
+        condition,condition_score=WMO.get(code,("Unknown",None))
+        # Missing WMO is missing weather, not clear sky; optional values stay null.
+        appeal=None
+        if condition_score is not None:
+            comfort=.5 if high is None else max(0,1-max(18-high,high-30,0)/20)
+            appeal=.8*condition_score+.2*comfort
+            if wind is not None: appeal-=min(.15,max(0,wind-25)/200)
+            if rain is not None: appeal-=min(.1,max(0,rain)/200)
+            appeal=round(max(0,min(1,appeal)),3)
+        days.append({"date":day_date,"wmo_code":code,"weather_code":code,"condition":condition,
+            "temp_max_c":high,"temp_min_c":low,"precipitation_mm":rain,
+            "precip_prob_pct":probability,"wind_kmh":wind,"appeal":appeal,
+            "emoji":"☀️" if code in (0,1,2) else "🌧" if code in (61,63,65,80,81,82) else "☁️"})
+    return days
+
+def _fetch_raw(lat,lon,days=14):
+    if os.getenv("WEATHER_NETWORK_ENABLED","true").lower()=="false": return None
+    try:
+        with httpx.Client(timeout=12) as client:
+            response=client.get("https://api.open-meteo.com/v1/forecast",params={
+                "latitude":lat,"longitude":lon,
+                "daily":"temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code,precipitation_probability_max,wind_speed_10m_max",
+                "forecast_days":days,"timezone":"auto","wind_speed_unit":"kmh"})
+            response.raise_for_status()
+            daily=response.json().get("daily")
+            if not isinstance(daily,dict): raise ValueError("Missing daily weather")
+            STATUS.update(status="live",last_error=None)
+            return daily
+    except Exception as exc:
+        status=getattr(getattr(exc,"response",None),"status_code",None)
+        error=f"HTTP_{status}" if status else type(exc).__name__
+        STATUS.update(status="unavailable",last_error=error)
+        logger.warning("Weather feed unavailable (%s); cached/neutral fallback",error)
         return None
 
+def _unknown(code):
+    return {"dest_code":code,"overall_appeal":None,"comfort_label":"Weather unavailable",
+        "today_condition":"Unknown","today_emoji":"?","today_temp_max_c":None,"today_temp_min_c":None,
+        "avg_temp_max_c":None,"today_precip_mm":None,"today_wind_kmh":None,
+        "days":[],"source":"unavailable","fetched_at":None,"stale":False}
 
-def get_weather_score(dest_codes: list[str]) -> dict[str, float]:
-    """
-    Lightweight scoring call used by the pipeline.
-    Returns {code: float 0-1} for each destination.
-    Uses 7-day window for speed.
-    """
-    scores: dict[str, float] = {}
-    now = time.time()
+def _read_disk(code,now):
+    try:
+        entry=json.loads((CACHE_DIR/(code+".json")).read_text(encoding="utf-8"))
+        age=now-entry["timestamp"]
+        if 0<=age<=_STALE_TTL and entry["data"]["dest_code"]==code:
+            return entry["data"],age
+    except (OSError,ValueError,TypeError,KeyError): pass
+    return None,None
 
-    for code in dest_codes:
-        # Cache hit
-        if code in _SCORE_CACHE and now < _SCORE_CACHE[code]["expires_at"]:
-            scores[code] = _SCORE_CACHE[code]["score"]
-            continue
+def _write_disk(code,data,now):
+    try:
+        CACHE_DIR.mkdir(parents=True,exist_ok=True)
+        target=CACHE_DIR/(code+".json")
+        temporary=CACHE_DIR/(code+".tmp")
+        temporary.write_text(json.dumps({"timestamp":now,"data":data}),encoding="utf-8")
+        temporary.replace(target)
+    except OSError:
+        logger.debug("Weather disk cache unavailable; in-memory cache retained")
 
-        if code not in AIRPORT_COORDS:
-            scores[code] = 0.5
-            continue
+def get_weather_detail(dest_code):
+    code=dest_code.upper()
+    if code not in AIRPORT_COORDS: return _unknown(code)
+    with _locks[code]:
+        now=time.time()
+        cached=_DETAIL_CACHE.get(code)
+        if cached and now<cached["expires_at"]: return cached["data"]
+        disk,age=_read_disk(code,now)
+        if disk and age<_DETAIL_TTL:
+            _DETAIL_CACHE[code]={"data":disk,"expires_at":now+_DETAIL_TTL-age}
+            return disk
+        raw=_fetch_raw(*AIRPORT_COORDS[code])
+        days=normalize_daily(raw) if raw else []
+        usable=[d for d in days if d["appeal"] is not None]
+        if usable:
+            appeal=round(sum(d["appeal"] for d in usable)/len(usable),3)
+            temperatures=[d["temp_max_c"] for d in days if d["temp_max_c"] is not None]
+            today=days[0]
+            result={"dest_code":code,"overall_appeal":appeal,
+                "comfort_label":"Good travel comfort" if appeal>=.7 else "Mixed travel comfort" if appeal>=.5 else "Poor travel comfort",
+                "today_emoji":today["emoji"],"today_condition":today["condition"],
+                "avg_temp_max_c":round(sum(temperatures)/len(temperatures),1) if temperatures else None,
+                "today_temp_max_c":today["temp_max_c"],"today_temp_min_c":today["temp_min_c"],
+                "today_precip_mm":today["precipitation_mm"],"today_wind_kmh":today["wind_kmh"],
+                "days":days,"source":"Open-Meteo (live)","stale":False,
+                "fetched_at":datetime.now(timezone.utc).isoformat()}
+            _write_disk(code,result,now)
+            ttl=_DETAIL_TTL
+        elif disk:
+            # Keep old dates intact; missing future dates are never invented.
+            result={**disk,"source":"Open-Meteo (stale)","stale":True}
+            ttl=_FAILURE_TTL
+        else:
+            result=_unknown(code)
+            ttl=_FAILURE_TTL
+        _DETAIL_CACHE[code]={"data":result,"expires_at":now+ttl}
+        return result
 
-        lat, lon = AIRPORT_COORDS[code]
-        daily = _fetch_raw(lat, lon, days=7)
-
-        if not daily:
-            scores[code] = 0.5
-            continue
-
-        wmo_codes = daily.get("weather_code", [])
-        temp_maxes = daily.get("temperature_2m_max", [])
-        days_count = min(7, len(wmo_codes))
-
-        if days_count == 0:
-            scores[code] = 0.5
-            continue
-
-        points = 0.0
-        for i in range(days_count):
-            wc = int(wmo_codes[i] or 0)
-            tmax = temp_maxes[i]
-            _, mult, _ = _wmo_info(wc)
-            points += mult  # 0.30–1.25 per day
-
-            # Temperature bonus: ideal travel temp 18–30°C
-            if tmax is not None:
-                if 18 <= tmax <= 30:
-                    points += 0.25
-                elif tmax > 38 or tmax < 5:
-                    points -= 0.30
-
-        max_possible = days_count * (1.25 + 0.25)  # max points per day
-        score = max(0.0, min(1.0, points / max_possible))
-        scores[code] = round(score, 3)
-        _SCORE_CACHE[code] = {"score": score, "expires_at": now + _SCORE_TTL}
-
-    return scores
-
-
-def get_weather_detail(dest_code: str) -> dict:
-    """
-    Full weather detail for the forecast panel — temperatures in °C,
-    7-day daily breakdown, current conditions, travel appeal score.
-    Called on-demand when a route card is clicked.
-    """
-    now = time.time()
-
-    # Detailed cache hit
-    if dest_code in _DETAIL_CACHE and now < _DETAIL_CACHE[dest_code]["expires_at"]:
-        return _DETAIL_CACHE[dest_code]["data"]
-
-    if dest_code not in AIRPORT_COORDS:
-        return _make_unknown_detail(dest_code)
-
-    lat, lon = AIRPORT_COORDS[dest_code]
-    daily = _fetch_raw(lat, lon, days=14)
-
-    if not daily:
-        return _make_unknown_detail(dest_code)
-
-    dates       = daily.get("time", [])
-    wmo_codes   = daily.get("weather_code", [])
-    temp_maxes  = daily.get("temperature_2m_max", [])
-    temp_mins   = daily.get("temperature_2m_min", [])
-    precip      = daily.get("precipitation_sum", [])
-    precip_prob = daily.get("precipitation_probability_max", [])
-    wind        = daily.get("windspeed_10m_max", [])
-
-    days_data = []
-    total_appeal = 0.0
-
-    for i in range(min(14, len(dates))):
-        wc    = int(wmo_codes[i] or 0) if i < len(wmo_codes) else 0
-        tmax  = round(temp_maxes[i], 1) if i < len(temp_maxes) and temp_maxes[i] is not None else None
-        tmin  = round(temp_mins[i],  1) if i < len(temp_mins)  and temp_mins[i]  is not None else None
-        prep  = round(precip[i],     1) if i < len(precip)     and precip[i]     is not None else 0.0
-        prob  = int(precip_prob[i]     ) if i < len(precip_prob) and precip_prob[i] is not None else 0
-        wind_ = round(wind[i],       1) if i < len(wind)        and wind[i]       is not None else None
-
-        label, appeal_mult, emoji = _wmo_info(wc)
-
-        # Temp comfort bonus
-        temp_bonus = 0.0
-        if tmax is not None:
-            if 18 <= tmax <= 30:
-                temp_bonus = 0.20
-            elif tmax > 38 or tmax < 5:
-                temp_bonus = -0.25
-
-        day_appeal = min(1.0, max(0.0, appeal_mult + temp_bonus))
-        total_appeal += day_appeal
-
-        days_data.append({
-            "date":           dates[i] if i < len(dates) else "",
-            "wmo_code":       wc,
-            "condition":      label,
-            "emoji":          emoji,
-            "temp_max_c":     tmax,
-            "temp_min_c":     tmin,
-            "precipitation_mm": prep,
-            "precip_prob_pct":  prob,
-            "wind_kmh":       wind_,
-            "appeal":         round(day_appeal, 2),
-        })
-
-    # Overall 7-day appeal score 0–1
-    n = len(days_data)
-    overall_appeal = round(total_appeal / n, 3) if n > 0 else 0.5
-
-    # Today's condition label
-    today = days_data[0] if days_data else {}
-    _, _, today_emoji = _wmo_info(today.get("wmo_code", 0))
-
-    # Travel comfort summary
-    avg_max = sum(d["temp_max_c"] for d in days_data if d["temp_max_c"] is not None) / max(1, n)
-    if overall_appeal >= 0.85:
-        comfort_label = "Excellent for travel ✈️"
-    elif overall_appeal >= 0.70:
-        comfort_label = "Good conditions 👍"
-    elif overall_appeal >= 0.50:
-        comfort_label = "Mixed — pack layers 🧥"
-    elif overall_appeal >= 0.30:
-        comfort_label = "Poor — demand suppressed 🌧"
-    else:
-        comfort_label = "Severe — avoid if possible ⚠️"
-
-    result = {
-        "dest_code":        dest_code,
-        "overall_appeal":   overall_appeal,
-        "comfort_label":    comfort_label,
-        "today_emoji":      today_emoji,
-        "avg_temp_max_c":   round(avg_max, 1),
-        "today_temp_max_c": today.get("temp_max_c"),
-        "today_temp_min_c": today.get("temp_min_c"),
-        "today_condition":  today.get("condition", "Unknown"),
-        "today_precip_mm":  today.get("precipitation_mm", 0),
-        "today_wind_kmh":   today.get("wind_kmh"),
-        "days":             days_data,
-        "fetched_at":       datetime.now(timezone.utc).isoformat(),
-        "source":           "Open-Meteo (live)",
-    }
-
-    _DETAIL_CACHE[dest_code] = {"data": result, "expires_at": now + _DETAIL_TTL}
-    return result
-
-
-def _make_unknown_detail(code: str) -> dict:
-    return {
-        "dest_code":       code,
-        "overall_appeal":  0.5,
-        "comfort_label":   "Weather data unavailable",
-        "today_emoji":     "❓",
-        "avg_temp_max_c":  None,
-        "today_temp_max_c": None,
-        "today_temp_min_c": None,
-        "today_condition": "Unknown",
-        "today_precip_mm": None,
-        "today_wind_kmh":  None,
-        "days":            [],
-        "fetched_at":      datetime.now(timezone.utc).isoformat(),
-        "source":          "unavailable",
-    }
+def get_weather_score(dest_codes):
+    return {code:get_weather_detail(code)["overall_appeal"] for code in dest_codes}

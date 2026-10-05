@@ -3,6 +3,7 @@ import TopBar from './components/TopBar';
 import useAgent from './hooks/useAgent';
 import BookingDashboard from './pages/BookingDashboard';
 import PolicyGraphPage from './pages/PolicyGraphPage';
+import ForecastsPage from './pages/ForecastsPage';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('booking');
@@ -18,7 +19,7 @@ export default function App() {
       />
       
       {/* Dynamic Main Workspace Rendering */}
-      {activeTab === 'booking' ? (
+      {activeTab === 'forecast' ? <ForecastsPage /> : activeTab === 'booking' ? (
         <BookingDashboard {...agentProps} />
       ) : (
         <PolicyGraphPage />
@@ -26,5 +27,4 @@ export default function App() {
     </div>
   );
 }
-
 

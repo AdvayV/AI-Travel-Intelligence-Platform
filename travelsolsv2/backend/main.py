@@ -25,10 +25,10 @@ from scheduler import (
     stop_scheduler,
     get_cached_forecasts,
     get_single_forecast,
-    FORECAST_CACHE,
-    LAST_REFRESH,
     run_pipeline
 )
+import scheduler as forecast_scheduler
+from forecast_api import router as forecast_router, forecast_status
 from graph.pdf_ingestor import ingest_pdf
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
@@ -86,6 +86,7 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+app.include_router(forecast_router)
 
 # CORS — allow both dev server ports (5173 for v1, 5174 for v2)
 app.add_middleware(
@@ -667,9 +668,10 @@ def api_health():
         "chroma": chroma_counts,
         "huggingface": hf_ok,
         "agent_mode": os.getenv("AGENT_MODE", "deterministic"),
-        "chronos_model": "chronos-bolt-small",
-        "forecast_cache_size": len(FORECAST_CACHE),
-        "last_forecast_refresh": LAST_REFRESH.isoformat() if LAST_REFRESH else None
+        "chronos_model": forecast_scheduler.MODEL_ID,
+        "forecast_cache_size": len(forecast_scheduler.cache_snapshot()),
+        "last_forecast_refresh": forecast_scheduler.LAST_REFRESH.isoformat() if forecast_scheduler.LAST_REFRESH else None,
+        "forecasting": forecast_status()
     }
 
 @app.get("/api/origins")
@@ -681,46 +683,3 @@ def get_origins():
         {"code": "MAA", "name": "Chennai"},
         {"code": "HYD", "name": "Hyderabad"}
     ]
-
-@app.get("/api/forecasts")
-def list_forecasts(origin: str = "BOM", limit: int = 20):
-    try:
-        results = get_cached_forecasts(origin)
-        return results[:limit]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/forecast/{origin}/{dest}")
-def single_forecast(origin: str, dest: str):
-    try:
-        data = get_single_forecast(origin, dest)
-        if not data:
-            raise HTTPException(status_code=404, detail="Route not found")
-            
-        trend_word = "present" if data["trend_score"] > 0 else "absent"
-        diff_pct = data["momentum_pct"]
-        travel_diff = data["travel_rank_2w"] - data["travel_rank_12w"]
-        travel_dir = "up" if travel_diff < 0 else "down" # lower rank is better
-        gds_momentum = abs(int(((data["travel_rank_12w"] - data["travel_rank_2w"]) / 50.0) * 100))
-        
-        explanation = (
-            f"Travel GDS demand {travel_dir} {gds_momentum}% in last 2 weeks. "
-            f"Google Trends signal {trend_word}. "
-            f"Destination weather score {data['weather_score']}. "
-            f"Chronos model forecasts {data['trend']} demand over next 30 days."
-        )
-        data["signal_explanation"] = explanation
-        return data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/refresh")
-def refresh_data(background_tasks: BackgroundTasks):
-    try:
-        background_tasks.add_task(run_pipeline)
-        return {"status": "refreshing", "eta_seconds": 30}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-

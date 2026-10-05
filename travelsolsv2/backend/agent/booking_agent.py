@@ -649,9 +649,9 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
         fc = get_single_forecast(origin.upper(), dest.upper())
         if fc and fc.get("surge_multiplier", 1.0) > 1.0:
             surge_summary = (
-                f"\n\n⚡ **High Demand Signal**: High demand detected on the {origin}→{dest} route "
+                f"\n\n**Illustrative Demand Outlook**: Simulated rank-index outlook on the {origin}→{dest} route "
                 f"(Demand Tier: **{fc['tier']}**, Score: **{fc['score']:.0f}**, Trend: **{fc['trend']}**). "
-                "This is advisory analytics; live observed fares are unchanged."
+                "This is low-confidence sample-data analytics, not measured booking demand; live observed fares are unchanged."
             )
     except Exception:
         pass

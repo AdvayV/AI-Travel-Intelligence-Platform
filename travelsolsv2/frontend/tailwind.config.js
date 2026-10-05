@@ -6,6 +6,7 @@ export default {
   ],
   theme: {
     extend: {
+      gridTemplateColumns: { 14: 'repeat(14, minmax(0, 1fr))' },
       colors: {
         bg: 'var(--bg)',
         surface: 'var(--surface)',

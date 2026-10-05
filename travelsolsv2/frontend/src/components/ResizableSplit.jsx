@@ -13,13 +13,16 @@ export default function ResizableSplit({
 }) {
   const rootRef = useRef(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = Number(localStorage.getItem(storageKey));
-    return Number.isFinite(saved) ? clamp(saved, minSize, maxSize) : initialSize;
+    try {
+      const item = localStorage.getItem(storageKey);
+      const saved = item == null ? NaN : Number(item);
+      return Number.isFinite(saved) ? clamp(saved, minSize, maxSize) : initialSize;
+    } catch { return initialSize; }
   });
   const [isResizing, setIsResizing] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(storageKey, String(sidebarWidth));
+    try { localStorage.setItem(storageKey, String(sidebarWidth)); } catch {}
   }, [sidebarWidth, storageKey]);
 
   useEffect(() => {
@@ -56,6 +59,7 @@ export default function ResizableSplit({
         aria-valuetext={`${sidebarWidth} pixel context panel width`}
         onPointerDown={(event) => { event.preventDefault(); setIsResizing(true); }}
         onKeyDown={(event) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) event.preventDefault();
           if (event.key === 'ArrowLeft') adjustWidth(-24);
           if (event.key === 'ArrowRight') adjustWidth(24);
           if (event.key === 'Home') setSidebarWidth(minSize);

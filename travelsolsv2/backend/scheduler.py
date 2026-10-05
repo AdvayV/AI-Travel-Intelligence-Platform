@@ -1,18 +1,24 @@
+"""Atomic local forecasting refresh. Weather is the only network data feed."""
 import logging
-from datetime import datetime
+import threading
+import time
+from copy import deepcopy
+from datetime import datetime,timezone
+from concurrent.futures import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from travel_client import get_top_destinations
-from chronos_engine import forecast_route_demand
-from weather_client import get_weather_score
-from trends_client import get_trend_scores
-from scoring import compute_opportunity_score, rank_routes
+from chronos_engine import forecast_batch,apply_weather,MODEL_ID
+from weather_client import get_weather_detail
+from scoring import get_base_price,rank_routes
 
-logger = logging.getLogger(__name__)
-
-FORECAST_CACHE = {}
-LAST_REFRESH = None
-_scheduler = None
-
+logger=logging.getLogger(__name__)
+FORECAST_CACHE={}
+LAST_REFRESH=None
+REFRESH_STATUS={"running":False,"error":None,"duration_seconds":None}
+_cache_lock=threading.Lock()
+_refresh_lock=threading.Lock()
+_scheduler=None
+ORIGINS=["BOM","DEL","BLR","MAA","HYD"]
 CITY_NAMES = {
     "DXB": "Dubai", "LHR": "London", "SIN": "Singapore", "BKK": "Bangkok",
     "JFK": "New York", "DOH": "Doha", "KUL": "Kuala Lumpur", "NRT": "Tokyo",
@@ -24,98 +30,101 @@ CITY_NAMES = {
     "ICN": "Seoul", "TPE": "Taipei", "MNL": "Manila", "CGK": "Jakarta", "SGN": "Ho Chi Minh City"
 }
 
-def get_base_price(origin, dest):
-    seed = sum(ord(c) for c in origin + dest)
-    return 300 + (seed % 900)
+def refresh_status():
+    return dict(REFRESH_STATUS)
+
+def cache_snapshot():
+    with _cache_lock: return deepcopy(FORECAST_CACHE)
+
+def recompute_forecast_for_day(route,day_offset=0):
+    # Also used by the deterministic booking agent; beyond the 28-day horizon
+    # is rejected, not silently clamped to an unrelated date.
+    if not 0<=day_offset<28: raise ValueError("Day offset must be between 0 and 27")
+    daily=route["daily_forecast"][day_offset]
+    return {**deepcopy(route),"score":daily["score"],"tier":daily["tier"],
+        "surge_multiplier":daily["surge_multiplier"],
+        "current_price":daily["price_usd"],"weather_score":daily["weather_appeal"],
+        "selected_date":daily["date"],"selected_day_offset":day_offset,
+        "selected_weather":daily["weather"],"weather_source":daily["weather_source"],
+        "selected_demand":daily["demand"],"selected_weather_factor":daily["weather_factor"],
+        "signal_explanation":(
+            f"Local {route['forecast_method'].replace('_',' ')}; {route['observation_count']} simulated rank snapshots. "
+            f"Day {day_offset}: modeled rank index {daily['demand']:.2f}; "
+            f"weather factor {daily['weather_factor']:.3f}x ({daily['weather_source']}). "
+            "No search/HF inference API used. Low confidence; illustrative USD prices, not airline quotes.")}
 
 def run_pipeline():
     global LAST_REFRESH
-    logger.info("Starting forecast pipeline refresh...")
-    origins = ['BOM', 'DEL', 'BLR', 'MAA', 'HYD']
-    processed_count = 0
-    
-    for origin in origins:
-        try:
-            travel_data = get_top_destinations(origin)
-            snapshots = travel_data.get("snapshots", {})
-            
-            all_dests = set()
-            for snap in snapshots.values():
-                all_dests.update(snap.keys())
-                
-            for dest in all_dests:
-                history = {
-                    "12w": snapshots.get("12w", {}).get(dest, 0.0),
-                    "8w": snapshots.get("8w", {}).get(dest, 0.0),
-                    "2w": snapshots.get("2w", {}).get(dest, 0.0)
-                }
-                
-                chronos_result = forecast_route_demand(history)
-                weather_scores = get_weather_score([dest])
-                trend_scores = get_trend_scores([dest])
-                
-                w_score = weather_scores.get(dest, 0.5)
-                t_score = trend_scores.get(dest, 0.0)
-                
-                score_data = compute_opportunity_score(
-                    travel_momentum=history["2w"],
-                    trend_score=t_score,
-                    weather_score=w_score,
-                    chronos_momentum_pct=chronos_result["momentum_pct"]
-                )
-                
-                dest_name = CITY_NAMES.get(dest, dest)
-                
-                base_price = get_base_price(origin, dest)
-                surge_multiplier = 1.0
-                if score_data["score"] >= 40:
-                    surge_multiplier = 1.0 + ((score_data["score"] - 40) / 75.0)
-                current_price = base_price * surge_multiplier
-                
-                FORECAST_CACHE[f"{origin}-{dest}"] = {
-                    "origin": origin,
-                    "destination": dest,
-                    "dest_city_name": dest_name,
-                    "score": score_data["score"],
-                    "tier": score_data["tier"],
-                    "trend": chronos_result["trend"],
-                    "momentum_pct": round(chronos_result["momentum_pct"], 1),
-                    "mean_demand": round(chronos_result["mean_demand"], 3),
-                    "peak_demand": round(chronos_result["peak_demand"], 3),
-                    "weekly_forecast": [round(x, 3) for x in chronos_result["weekly_forecast"]],
-                    "weather_score": round(w_score, 2),
-                    "trend_score": round(t_score, 2),
-                    "travel_rank_2w": int(51 - history["2w"]*50) if history["2w"] > 0 else 50,
-                    "travel_rank_8w": int(51 - history["8w"]*50) if history["8w"] > 0 else 50,
-                    "travel_rank_12w": int(51 - history["12w"]*50) if history["12w"] > 0 else 50,
-                    "base_price": round(base_price, 2),
-                    "surge_multiplier": round(surge_multiplier, 2),
-                    "current_price": round(current_price, 2)
-                }
-                processed_count += 1
-        except Exception as e:
-            logger.error(f"Error processing forecasting pipeline for origin {origin}: {e}")
-            
-    LAST_REFRESH = datetime.now()
-    logger.info(f"Pipeline refresh complete. Processed {processed_count} routes.")
+    if not _refresh_lock.acquire(blocking=False): return False
+    started=time.monotonic()
+    REFRESH_STATUS.update(running=True,error=None)
+    try:
+        inputs=[]
+        for origin in ORIGINS:
+            snapshots=get_top_destinations(origin)["snapshots"]
+            destinations=sorted(set().union(*(values.keys() for values in snapshots.values())))
+            for dest in destinations:
+                history={window:snapshots.get(window,{}).get(dest) for window in ["12w","8w","2w"]}
+                inputs.append((origin,dest,history))
+        predictions=forecast_batch([history for _,_,history in inputs])
+        destinations=sorted({dest for _,dest,_ in inputs})
+        # Fetch once per unique destination, never once per origin/route.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            weather=dict(zip(destinations,pool.map(get_weather_detail,destinations)))
+        updated_at=datetime.now(timezone.utc).isoformat()
+        pending={}
+        for (origin,dest,history),prediction in zip(inputs,predictions):
+            result=apply_weather(prediction,weather[dest])
+            base=get_base_price(origin,dest)
+            for day in result["daily_forecast"]:
+                day["price_usd"]=round(base*day["surge_multiplier"],2)
+            route={"origin":origin,"destination":dest,"dest_city_name":CITY_NAMES.get(dest,dest),
+                "history":history,**result,"base_price":base,"currency":"USD",
+                "history_source":"simulated_rank_snapshots","price_source":"illustrative",
+                "forecast_model":MODEL_ID if not result["fallback"] else None,
+                "weather_source":weather[dest]["source"],"updated_at":updated_at,
+                "trend_score":None,"trend_source":"disabled","forecast_version":"local-weather-bolt-v1"}
+            for window,value in history.items():
+                route["travel_rank_"+window]=round(51-value*50) if value is not None else None
+            today=result["daily_forecast"][0]
+            route.update(score=today["score"],tier=today["tier"],surge_multiplier=today["surge_multiplier"],
+                         current_price=today["price_usd"],weather_score=today["weather_appeal"])
+            candidates=[d for d in result["daily_forecast"] if d["weather_available"] and
+                        d["weather_source"]=="Open-Meteo (live)" and d["weather_appeal"]>=.5]
+            if candidates:
+                best=max(candidates,key=lambda d:(d["weather_appeal"]/d["surge_multiplier"],-d["day_offset"]))
+                route["optimal_day"]={k:best[k] for k in ["day_offset","date","price_usd","weather_appeal"]}
+            else: route["optimal_day"]=None
+            pending[f"{origin}-{dest}"]=route
+        if not pending: raise ValueError("Empty forecast universe")
+        # Retain dictionary identity for existing consumers imported by value.
+        with _cache_lock:
+            FORECAST_CACHE.clear()
+            FORECAST_CACHE.update(pending)
+            LAST_REFRESH=datetime.now(timezone.utc)
+        logger.info("Refreshed %s routes without search or hosted inference APIs",len(pending))
+        return True
+    except Exception as exc:
+        REFRESH_STATUS["error"]=type(exc).__name__
+        logger.exception("Refresh failed; previous complete forecasts retained")
+        return False
+    finally:
+        REFRESH_STATUS.update(running=False,duration_seconds=round(time.monotonic()-started,2))
+        _refresh_lock.release()
 
 def start_scheduler():
     global _scheduler
-    _scheduler = BackgroundScheduler()
-    _scheduler.add_job(run_pipeline, 'interval', minutes=30)
+    _scheduler=BackgroundScheduler()
+    _scheduler.add_job(run_pipeline,"interval",minutes=30,max_instances=1,coalesce=True)
     _scheduler.start()
-    # Run immediately on startup
     _scheduler.add_job(run_pipeline)
 
 def stop_scheduler():
-    if _scheduler:
-        _scheduler.shutdown()
+    if _scheduler: _scheduler.shutdown(wait=False)
 
 def get_cached_forecasts(origin=None):
-    results = list(FORECAST_CACHE.values())
-    if origin:
-        results = [r for r in results if r["origin"] == origin]
-    return rank_routes(results)
+    values=list(cache_snapshot().values())
+    return rank_routes([r for r in values if origin is None or r["origin"]==origin.upper()])
 
-def get_single_forecast(origin, dest):
-    return FORECAST_CACHE.get(f"{origin}-{dest}")
+def get_single_forecast(origin,dest):
+    with _cache_lock: return deepcopy(FORECAST_CACHE.get(f"{origin.upper()}-{dest.upper()}"))

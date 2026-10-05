@@ -16,6 +16,6 @@ apscheduler
 pytrends
 pandas
 numpy
-git+https://github.com/amazon-science/chronos-forecasting.git
+chronos-forecasting==2.3.0
 pypdf
 fast-flights==3.1.0
