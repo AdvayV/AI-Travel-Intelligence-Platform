@@ -106,7 +106,7 @@ export default function BookingDashboard({
   return (
     <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 py-4 sm:py-6 min-h-0 animate-fade-in">
       <ResizableSplit initialSize={440} minSize={340} maxSize={620} storageKey="travelroute-booking-context-width" sidebar={
-        <div className="lg:h-[calc(100vh-112px)] lg:overflow-y-auto pr-1 flex flex-col gap-4 pb-1">
+        <div className="grid min-w-0 auto-rows-max content-start gap-4 pr-1 pb-1 lg:h-[calc(100vh-112px)] lg:overflow-y-auto">
           <div className="flex items-center justify-between px-1">
             <div><p className="text-[10px] uppercase font-extrabold tracking-[0.14em] text-text-tertiary">Trip brief</p><h1 className="text-base font-bold tracking-tight text-text-primary">Build a compliant itinerary</h1></div>
             <span className="hidden lg:inline-flex text-[10px] text-text-tertiary bg-surface border border-border rounded-full px-2 py-1">Drag divider to resize</span>

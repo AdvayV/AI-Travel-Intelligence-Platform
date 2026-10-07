@@ -41,8 +41,8 @@ body {
 }
 
 * { box-sizing: border-box; }
-button, input, textarea { font: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button, input, select, textarea { font-family: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 ::selection { background: #C7D2FE; color: #1E1B4B; }
 
 .resizable-split {

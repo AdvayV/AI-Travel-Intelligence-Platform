@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 
 const QUICK_QUERIES = [
   { label: 'Grade 1 · Bombay to London', text: 'Bombay to London 21st August grade 1' },
@@ -23,6 +23,7 @@ const gradeSummary = (grade) => {
 };
 
 export default function QueryInput({ onSubmit, isLoading }) {
+  const fieldId = useId();
   const [text, setText] = useState('Bombay to London 21st August grade 1');
   const [passengerName, setPassengerName] = useState('Aryan Mehta');
   const [grade, setGrade] = useState(1);
@@ -38,7 +39,7 @@ export default function QueryInput({ onSubmit, isLoading }) {
     event.preventDefault();
     if (!text.trim() || isLoading) return;
     const normalizedQuery = GRADE_PATTERN.test(text) ? text.trim() : `${text.trim()} grade ${grade}`;
-    onSubmit(normalizedQuery, passengerName);
+    onSubmit(normalizedQuery, passengerName.trim());
   };
 
   const handleGradeChange = (event) => {
@@ -71,29 +72,35 @@ export default function QueryInput({ onSubmit, isLoading }) {
             placeholder="Example: Bombay to London 21st August grade 1"
             rows={3}
             disabled={isLoading}
-            className="w-full resize-none rounded-xl border border-border-strong bg-surface/60 px-3.5 py-3 text-sm font-medium leading-relaxed text-text-primary shadow-inner transition focus:border-accent focus:bg-white focus:outline-none disabled:opacity-60"
+            className="w-full resize-none rounded-[12px] border border-slate-300 bg-white px-3.5 py-3 text-sm font-medium leading-relaxed text-text-primary shadow-sm transition placeholder:text-slate-500 hover:border-slate-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
           />
         </label>
 
-        <div className="grid grid-cols-[minmax(0,1fr)_112px] gap-3">
-          <label className="flex min-w-0 flex-col gap-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Traveler</span>
+        <div className="grid min-w-0 grid-cols-1 gap-4">
+          <label htmlFor={`${fieldId}-passenger`} className="flex min-w-0 flex-col gap-2">
+            <span className="text-xs font-semibold text-text-primary">Passenger name</span>
             <input
+              id={`${fieldId}-passenger`}
+              name="passengerName"
               type="text"
+              autoComplete="name"
+              maxLength={100}
               value={passengerName}
               onChange={(event) => setPassengerName(event.target.value)}
-              placeholder="Passenger name"
+              placeholder="Enter the passenger's full name"
               disabled={isLoading}
-              className="min-w-0 rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-semibold text-text-primary transition focus:border-accent focus:outline-none"
+              className="block min-h-12 w-full min-w-0 rounded-[12px] border border-slate-300 bg-white px-3.5 py-3 text-sm font-medium leading-5 text-slate-900 shadow-sm transition placeholder:text-slate-500 hover:border-slate-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
             />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary">Grade</span>
+          <label htmlFor={`${fieldId}-grade`} className="flex min-w-0 flex-col gap-2">
+            <span className="text-xs font-semibold text-text-primary">Employee grade</span>
             <select
+              id={`${fieldId}-grade`}
+              name="employeeGrade"
               value={grade}
               onChange={handleGradeChange}
               disabled={isLoading}
-              className="rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-bold text-text-primary transition focus:border-accent focus:outline-none"
+              className="block min-h-12 w-full min-w-0 rounded-[12px] border border-slate-300 bg-white px-3.5 py-3 text-sm font-medium leading-5 text-slate-900 shadow-sm transition hover:border-slate-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
             >
               {Array.from({ length: 9 }, (_, index) => index + 1).map((value) => (
                 <option key={value} value={value}>Grade {value}</option>
