@@ -84,6 +84,42 @@ cited context and is instructed not to follow directions embedded in documents.
 Retrieved PDF amounts are heuristic annotations, **not executable policy rules**.
 Stored grade/cabin/fare/advance/approval checks remain the compliance authority.
 
+### Visible booking decision trail
+
+- Select an option and open **Proposal** or **Decision & tool trail** to see the
+  backend's ordered audit: grade mapping, policy source, requested/searched/returned
+  cabin, eligible waivers, booking code, fare cap, date, lead time, preferred airline,
+  approval threshold and final decision. Each step includes its rule, actual value,
+  outcome and source; the UI does not infer pass/fail from message substrings.
+- Grade 1–5 uses CP-001/Economy; Grade 6–7 uses CP-002 with Business only for the
+  configured long-haul destination list; Grade 8 uses CP-002/Economy or Business;
+  Grade 9 uses CP-003 with Business default and First permitted when requested.
+  Long-haul classification is a demo destination list, not measured flight duration.
+- Primary and BLR alternative offers share one evaluator. Alternative waivers are
+  looked up for BLR, not reused from BOM. Demo discounts are applied before checking
+  the displayed fare; live comparison fares are not multiplied or discounted.
+- Invalid/past dates and unavailable corporate policies cannot pass compliance.
+  Inferred fare codes are explicitly unverified; cabin-derived codes do not prove
+  airline booking-class availability. Waiver lookup failures appear as warnings.
+- Results retain provider ordering, including non-compliant offers. The UI initially
+  selects the first compliant result requiring no approval, otherwise the first
+  result. This is not a cheapest-fare or optimal-flight ranking algorithm.
+- Approval flags identify the responsible role (line manager, VP or executive)
+  and reason. They are **not sent or stored approval requests**. Saving creates only
+  a demo reference, does not issue a ticket, and does not clear hard violations.
+  The save endpoint remains a demonstration endpoint, not a production approval gate.
+
+### Repository cleanup
+
+The unused, empty `travel/auth.py`, accidental `(n)` output file and two duplicate
+subdirectory `powershell.cmd` wrappers were removed. The unused v2 Google Trends
+client and its dependency/startup check were also removed; v1 still uses Trends.
+The root wrapper remains for
+environments where Windows PowerShell is absent from PATH; supported launchers use
+an explicit executable. Manual Cypher/credential diagnostics, the policy reference
+sheet, tests, seed data and mock fallback datasets remain intentional tools/assets;
+absence from the runtime import graph alone is not a reason to delete them.
+
 ### Ingestion and fallback behavior
 
 - The root `corporate_travel_policy.pdf` is indexed at startup. Chunks are bounded,

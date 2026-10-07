@@ -13,7 +13,6 @@ truststore
 pydantic
 torch
 apscheduler
-pytrends
 pandas
 numpy
 chronos-forecasting==2.3.0

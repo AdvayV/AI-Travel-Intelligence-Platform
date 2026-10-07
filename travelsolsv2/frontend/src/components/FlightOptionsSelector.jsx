@@ -35,12 +35,12 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
     if (!flight.compliant) {
       statusBg = 'bg-rose-500/10 text-rose-400 border-rose-500/20';
       statusLabel = 'Non-Compliant';
+    } else if (flight.requires_approval) {
+      statusBg = 'bg-purple-50 text-purple-800 border-purple-200';
+      statusLabel = 'Approval Required';
     } else if (flight.compliance_details && flight.compliance_details.includes('Waiver Exception')) {
       statusBg = 'bg-amber-500/10 text-amber-400 border-amber-500/20';
       statusLabel = 'Compliant via Waiver';
-    } else if (flight.requires_approval) {
-      statusBg = 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-      statusLabel = 'Requires Manager Approval';
     }
 
     // Weather risk badge
@@ -199,9 +199,10 @@ export default function FlightOptionsSelector({ options, selected, onSelect }) {
       {/* Standard Flights Section */}
       <div className="flex flex-col gap-2.5">
         <h4 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-          <span>Policy-ranked flight options</span>
+          <span>Policy-evaluated flight options</span>
           <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
         </h4>
+        <p className="text-xs leading-relaxed text-text-secondary">Results follow the search provider's order, with policy checks attached. Select a flight to see its rules and decision trail; approval badges do not send a manager request.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {standardFlights.map(renderFlightCard)}
         </div>

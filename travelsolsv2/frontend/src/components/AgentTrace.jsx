@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
+import PolicyDecisionTrail from './PolicyDecisionTrail';
 
-export default function AgentTrace({ steps, isLoading }) {
+export default function AgentTrace({ steps, isLoading, selectedFlight }) {
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -65,9 +66,8 @@ export default function AgentTrace({ steps, isLoading }) {
 
   const getStepNumberText = () => {
     const regularSteps = steps.filter(s => s.tool_name !== 'conclusion');
-    const totalCount = 5; // standard sequence is 5 tools
     if (isLoading) {
-      return `${regularSteps.length} of ${totalCount} tools called...`;
+      return `${regularSteps.length} tool executions recorded; processing...`;
     }
     return `${regularSteps.length} tool executions completed`;
   };
@@ -76,7 +76,7 @@ export default function AgentTrace({ steps, isLoading }) {
     <div className="bg-surface-raised border border-border shadow-lg rounded-lg h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-5 py-4 border-b border-border bg-surface flex items-center justify-between">
-        <span className="text-sm font-semibold text-text-primary">Agent reasoning trace</span>
+        <span className="text-sm font-semibold text-text-primary">Decision and tool audit trail</span>
         {steps.length > 0 && (
           <span className="text-xs font-semibold text-text-secondary">
             {getStepNumberText()}
@@ -87,8 +87,9 @@ export default function AgentTrace({ steps, isLoading }) {
       {/* Scrollable Trace Body */}
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-5 flex flex-col gap-4 min-h-[450px]"
+        className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4"
       >
+        <PolicyDecisionTrail flight={selectedFlight} />
         {steps.length === 0 ? (
           /* Empty State */
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center select-none py-12">
@@ -130,9 +131,7 @@ export default function AgentTrace({ steps, isLoading }) {
                       {style.label}
                     </span>
                   </div>
-                  <span className="text-[10px] text-text-tertiary">
-                    {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                  </span>
+                  <span className="text-[10px] text-text-secondary">Step {idx + 1}</span>
                 </div>
 
                 {/* Step Content */}
@@ -153,7 +152,7 @@ export default function AgentTrace({ steps, isLoading }) {
                       {isConclusion ? 'Response Content:' : 'Tool Output:'}
                     </span>
                     <p className={`whitespace-pre-line text-text-primary ${isConclusion ? 'text-sm font-medium' : ''}`}>
-                      {step.tool_output.replace(/\*\*/g, '').replace(/\*/g, '')}
+                      {String(step.tool_output || '').replace(/\*\*/g, '').replace(/\*/g, '')}
                     </p>
                   </div>
                 </div>

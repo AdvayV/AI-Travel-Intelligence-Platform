@@ -1,12 +1,11 @@
 import os
 import re
-import random
 import logging
-from datetime import datetime, date
+from datetime import date
 from dotenv import load_dotenv
 from tls_config import enable_system_trust_store
 from agent.graph_rag import retrieve_context
-from agent.policy_resolver import resolve_booking_policy, LONG_HAUL_DESTINATIONS
+from agent.policy_resolver import resolve_booking_policy
 from agent.query_parser import parse_prompt_date
 from agent.tools import ALL_TOOLS
 
@@ -77,379 +76,123 @@ def evaluate_flight_options(
     policy_decision: dict = None,
 ) -> list:
     from travel.flight_search import search_flights_api
-    from graph.neo4j_client import get_active_waivers, get_corporate_policy
-    from agent.tools import get_weather_risk_tool
-    from scheduler import get_single_forecast
-    
+    from graph.neo4j_client import get_active_waivers, get_corporate_policy, get_driver
+    from scheduler import get_single_forecast, recompute_forecast_for_day
+    from weather_client import get_weather_detail
+    from agent.policy_audit import evaluate_policy_checks
+
     try:
         flights = search_flights_api(origin, dest, travel_date, cabin_class)
-    except Exception as e:
-        logger.error(f"Flight search failed in evaluation: {e}")
+    except Exception as error:
+        logger.error("Flight search failed in evaluation: %s", error)
         flights = []
 
-    # Calculate travel date offset from today
     try:
-        travel_dt = datetime.strptime(travel_date, "%Y-%m-%d").date()
-        day_offset = (travel_dt - date.today()).days
-        if day_offset < 0:
-            day_offset = 0
-    except:
+        day_offset = max(0, (date.fromisoformat(travel_date) - date.today()).days)
+    except (ValueError, TypeError):
         day_offset = 0
 
-    # --- Surge Pricing from Route Forecast for travel date ---
     surge_info = None
     try:
         base_forecast = get_single_forecast(origin.upper(), dest.upper())
-        if base_forecast:
-            from scheduler import recompute_forecast_for_day
-            forecast = recompute_forecast_for_day(base_forecast, day_offset)
-            if forecast and forecast.get("surge_multiplier", 1.0) > 0.0:
-                surge_info = {
-                    "multiplier": forecast["surge_multiplier"],
-                    "score": forecast["score"],
-                    "tier": forecast["tier"],
-                    "trend": forecast["trend"],
-                    "momentum_pct": forecast["momentum_pct"]
-                }
-                logger.info(f"Recomputed surge for {origin}-{dest} on day offset {day_offset}: {surge_info['multiplier']}x (score={surge_info['score']})")
-    except Exception as e:
-        logger.warning(f"Could not load/recompute surge forecast for {origin}-{dest}: {e}")
-        
-    try:
-        waivers = get_active_waivers(origin, dest, travel_date)
-    except Exception as e:
-        logger.error(f"Waiver check failed in evaluation: {e}")
-        waivers = []
-        
-    has_monsoon_waiver = any(w.get("id") == "WX-2026-INDIA" for w in waivers)
-    
-    # Fetch destination weather for the specific travel date using Open-Meteo
-    from weather_client import get_weather_detail
-    dest_weather_desc = "Weather information unavailable"
+        forecast = recompute_forecast_for_day(base_forecast, day_offset) if base_forecast else None
+        if forecast and forecast.get("surge_multiplier", 1.0) > 0:
+            surge_info = {"multiplier": forecast["surge_multiplier"], "score": forecast["score"],
+                          "tier": forecast["tier"], "trend": forecast["trend"]}
+    except Exception as error:
+        logger.warning("Could not load route forecast: %s", error)
+
+    weather_summary = "Weather information unavailable"
     is_high_weather_risk = False
     try:
-        dest_w = get_weather_detail(dest.upper())
-        if "days" in dest_w and 0 <= day_offset < len(dest_w["days"]):
-            day_data = dest_w["days"][day_offset]
-            dest_weather_desc = f"{day_data['temp_max_c']}°C, {day_data['condition']} {day_data['emoji']}"
-            # Determine risk level based on daily appeal score
-            appeal = day_data.get("appeal", 1.0)
-            if appeal <= 0.4:
-                is_high_weather_risk = True
-            logger.info(f"Retrieved destination weather for day offset {day_offset}: {dest_weather_desc} (is_high_weather_risk={is_high_weather_risk})")
+        weather = get_weather_detail(dest.upper())
+        if 0 <= day_offset < len(weather.get("days", [])):
+            day_weather = weather["days"][day_offset]
+            weather_summary = f"{day_weather['temp_max_c']}°C, {day_weather['condition']} {day_weather['emoji']}"
+            is_high_weather_risk = day_weather.get("appeal", 1.0) <= 0.4
         else:
-            temp = dest_w.get("today_temp_max_c")
-            cond = dest_w.get("today_condition")
-            emoji = dest_w.get("today_emoji", "")
-            if temp is not None:
-                dest_weather_desc = f"{temp}°C, {cond} {emoji}"
-            is_high_weather_risk = dest_w.get("overall_appeal", 1.0) <= 0.4
-    except Exception as e:
-        logger.warning(f"Could not retrieve weather details for {dest}: {e}")
+            if weather.get("today_temp_max_c") is not None:
+                weather_summary = f"{weather['today_temp_max_c']}°C, {weather.get('today_condition', '')} {weather.get('today_emoji', '')}"
+            is_high_weather_risk = weather.get("overall_appeal", 1.0) <= 0.4
+    except Exception as error:
+        logger.warning("Could not retrieve destination weather: %s", error)
 
-    weather_summary = dest_weather_desc
-
-    
+    strict = get_driver() is not None
+    policy_source = "Neo4j corporate policy" if strict else "Demo policy fallback"
     try:
-        policy = get_corporate_policy(policy_id) or {}
-    except Exception as e:
-        logger.error(f"Policy retrieval failed in evaluation: {e}")
+        policy = get_corporate_policy(policy_id, strict=strict) or {}
+    except Exception as error:
+        logger.error("Policy lookup failed: %s", error)
         policy = {}
+        policy_source = "Neo4j lookup failed"
+    decision = dict(policy_decision or resolve_booking_policy(
+        f"grade {band or 5}", {"airports": [origin, dest]}))
+    decision["policy_id"] = policy_id
 
-    policy_context = dict(policy_decision or {})
-    policy_context.update({
-        "employee_grade": band,
-        "policy_id": policy_id,
-        "policy_name": policy.get("name", policy_id),
-        "allowed_cabins": policy_context.get("allowed_cabins", policy.get("allowed_cabins", [])),
-        "min_advance_days": policy.get("min_advance_days", 0),
-        "max_fare_inr": policy.get("max_fare_inr"),
-        "travel_date": travel_date,
-        "origin": origin,
-        "destination": dest,
-    })
-        
-    evaluated = []
-    
-    # Calculate advance booking days
-    try:
-        travel_dt = datetime.strptime(travel_date, "%Y-%m-%d").date()
-        advance_days = (travel_dt - date.today()).days
-        if advance_days < 0:
-            advance_days = 7
-    except:
-        advance_days = 7
-        
-    for f in flights:
-        f_num = f["flight_number"]
-        airline = f["airline"]
-        f_class = f["fare_class"]
-        price = f["price_inr"]
-        is_live_price = bool(f.get("is_live_price"))
+    def route_waivers(route_origin):
+        try:
+            return get_active_waivers(route_origin, dest, travel_date, strict=strict), None
+        except Exception as error:
+            logger.error("Waiver lookup failed for %s: %s", route_origin, error)
+            return [], "Waiver lookup failed; no waiver exception was assumed."
 
-        display_class = _display_cabin(f)
-
+    def evaluate_offer(flight, waivers, waiver_error=None, alternative=False):
+        display_class = _display_cabin(flight)
+        price = flight["price_inr"]
+        live_price = bool(flight.get("is_live_price"))
         surge_applied = None
         market_signal = None
-        if surge_info:
-            market_signal = {
-                "multiplier": surge_info["multiplier"],
-                "score": surge_info["score"],
-                "tier": surge_info["tier"],
-                "trend": surge_info["trend"],
-                "note": "Forecast signal only; it does not alter live comparison fares."
-            }
-
-        if surge_info and not is_live_price:
-            pre_surge_price = price
-            price = int(price * surge_info["multiplier"])
-            surge_applied = {
-                "multiplier": surge_info["multiplier"],
-                "pre_surge_price_inr": pre_surge_price,
-                "reason": f"High demand surge ({surge_info['tier']} tier, score {surge_info['score']:.0f}, trend {surge_info['trend']})"
-            }
-            f["price_inr"] = price  # update so policy cap check uses surged price
-        
-        # Policy rules
-        allowed_fare_classes = policy.get("allowed_fare_classes", [])
-        max_fare = policy.get("max_fare_inr", 999999)
-        min_advance = policy.get("min_advance_days", 0)
-        pref_airlines = policy.get("preferred_airlines", [])
-        
-        violations = []
-        if not policy:
-            violations.append(f"Corporate policy {policy_id} could not be verified; compliance cannot be established")
-        waiver_exceptions = []
-        approval_reasons = []
-
-        # Check passenger band and destination restrictions
-        if band is not None:
-            # Bands 1-5: strictly restricted to Economy on all routes
-            if 1 <= band <= 5:
-                if display_class != "Economy":
-                    violations.append(f"Passenger is in Band {band} and is restricted to Economy travel only")
-            # Bands 6-7: allowed Business only on transcontinental routes
-            elif 6 <= band <= 7:
-                is_long_haul = dest.upper() in LONG_HAUL_DESTINATIONS
-                if display_class == "Business" and not is_long_haul:
-                    violations.append(f"Passenger is in Band {band} and is restricted to Economy on short-haul/medium-haul routes (only transcontinental routes permit Business class)")
-                if display_class == "First":
-                    violations.append(f"Passenger is in Band {band}; First class is reserved for Grade 9 executives")
-            elif band == 8 and display_class == "First":
-                violations.append("Passenger is in Band 8; First class is reserved for Grade 9 executives")
-        
-        # Check fare class compliance
-        allowed_fare_classes_normalized = list(allowed_fare_classes)
-        # If Business class is allowed destination and band-wise, we ensure standard business fare classes are treated as allowed
-        if display_class == "Business":
-            is_long_haul = dest.upper() in LONG_HAUL_DESTINATIONS
-            if (band >= 8) or (6 <= band <= 7 and is_long_haul):
-                # Ensure business classes are allowed
-                allowed_fare_classes_normalized.extend(["J", "C", "D"])
-        elif display_class == "First" and band == 9:
-            allowed_fare_classes_normalized.append("F")
-                
-        if f_class not in allowed_fare_classes_normalized:
-            # Waiver Exception: CP-001 monsoon provisions reduces restrictions for Y class
-            if policy_id == "CP-001" and has_monsoon_waiver and f_class == "Y":
-                waiver_exceptions.append("Economy allowed under Monsoon Waiver Exception (WX-2026-INDIA)")
-            else:
-                violations.append(f"Fare class '{display_class}' is restricted under policy {policy_id}.")
-                
-        # Check maximum price
-        if price > max_fare:
-            violations.append(f"Price INR {price:,} exceeds policy cap of INR {max_fare:,}")
-            
-        # Check advance booking window
-        if advance_days < min_advance:
-            # Waiver Exception: CP-001 Monsoon Amendment reduces booking window to 2 days
-            if policy_id == "CP-001" and has_monsoon_waiver and advance_days >= 2:
-                waiver_exceptions.append("Advance booking reduced to 2 days under Monsoon Amendment")
-            # Senior management transcontinental exception (dest LHR, JFK is > 8h)
-            elif policy_id == "CP-002" and dest in ["LHR", "JFK"] and advance_days < min_advance:
-                waiver_exceptions.append("Advance booking window exception applied for transcontinental sector > 8h")
-            else:
-                approval_reasons.append(
-                    f"Booked {advance_days} days in advance; the policy target is {min_advance} days and VP approval is required"
-                )
-                
-        # Check preferred carrier
-        is_preferred = airline in pref_airlines
-        carrier_note = None
-        if not is_preferred:
-            carrier_note = f"Non-preferred airline '{airline}'"
-            
-        # Overall status
-        if violations:
-            compliant = False
-            compliance_details = "NON-COMPLIANT: " + "; ".join(violations)
-        elif waiver_exceptions:
-            compliant = True
-            compliance_details = "COMPLIANT via Waiver Exception: " + "; ".join(waiver_exceptions)
-        elif approval_reasons:
-            compliant = True
-            compliance_details = "CONDITIONALLY COMPLIANT: " + "; ".join(approval_reasons)
-        else:
-            compliant = True
-            compliance_details = "COMPLIANT: All checks passed."
-            if carrier_note:
-                compliance_details += f" ({carrier_note} requires notification)"
-                
-        # Check if booking requires approval
-        requires_approval = bool(approval_reasons)
-        approval_threshold = policy.get("requires_approval_above_inr", 999999)
-        if compliant and price > approval_threshold:
-            requires_approval = True
-            compliance_details += f" (Requires executive approval above INR {approval_threshold:,})"
-        elif compliant and carrier_note:
-            requires_approval = True
-            
-        disruption_risk = "LOW"
-        disruption_warning = ""
-        # Weather warnings
-        if is_high_weather_risk:
-            if "08:30" in f["departure_time"] or "09:00" in f["departure_time"]:
-                disruption_risk = "HIGH"
-                disruption_warning = "Severe weather warning during departure window. High delay probability."
-            else:
-                disruption_risk = "MODERATE"
-                disruption_warning = "Monsoon warning active. Afternoon flights carry lower delay probability."
-                
+        if surge_info and not alternative:
+            market_signal = {**surge_info, "note": "Forecast signal only; live comparison fares are unchanged."}
+            if not live_price:
+                surge_applied = {"multiplier": surge_info["multiplier"], "pre_surge_price_inr": price,
+                                 "reason": f"Demo forecast adjustment ({surge_info['tier']} demand tier)"}
+                price = int(price * surge_info["multiplier"])
         original_price = price
         discount_applied = None
         discount_note = None
-        has_air_india_discount = airline == "AI" and any(
-            w.get("id") == "CORP-AI-ANNUAL" for w in waivers
-        )
-        if has_air_india_discount and not is_live_price:
-            discounted_price = int(price * 0.88)
-            price = discounted_price
-            discount_applied = "12% Corporate AI Discount"
-        elif has_air_india_discount:
-            discount_note = "Potential 12% corporate Air India discount; verify during booking."
-            
-        evaluated.append({
-            "offer_id": f.get("offer_id"),
-            "flight_number": f_num,
-            "airline": airline,
-            "airline_name": f.get("airline_name", airline),
-            "airline_codes": f.get("airline_codes", [airline]),
-            "origin": f["origin"],
-            "destination": f["destination"],
-            "departure_time": f["departure_time"],
-            "arrival_time": f["arrival_time"],
-            "duration": f["duration"],
-            "stops": f["stops"],
-            "fare_class": display_class,
-            "price_inr": price,
-            "original_price_inr": original_price,
-            "discount_applied": discount_applied,
-            "discount_note": discount_note,
-            "surge_applied": surge_applied,
-            "market_signal": market_signal,
-            "compliant": compliant,
-            "requires_approval": requires_approval,
-            "compliance_details": compliance_details,
-            "disruption_risk": disruption_risk,
-            "disruption_warning": disruption_warning,
-            "weather": weather_summary,
-            "is_alternative": False,
-            "currency": f.get("currency", "INR"),
-            "source": f.get("source", "UNKNOWN"),
-            "price_source": f.get("price_source", "Unknown source"),
-            "is_live_price": is_live_price,
-            "observed_at": f.get("observed_at"),
-            "cache_status": f.get("cache_status"),
-            "search_url": f.get("search_url"),
-            "price_note": f.get("price_note"),
-            "fallback_reason": f.get("fallback_reason"),
-            "fare_class_estimated": f.get("fare_class_estimated", False),
-            "segments": f.get("segments", []),
-            "carbon_emissions_kg": f.get("carbon_emissions_kg"),
-            "typical_carbon_emissions_kg": f.get("typical_carbon_emissions_kg"),
-            "employee_grade": band,
-            "policy_id": policy_id,
-            "policy_name": policy_context["policy_name"],
-            "allowed_cabins": policy_context["allowed_cabins"],
-            "cabin_reason": policy_context.get("cabin_reason"),
-            "policy_context": policy_context,
-        })
-        
-    # Generate weather resilient or rerouting alternatives
-    if is_high_weather_risk and origin == "BOM":
-        try:
-            blr_flights = search_flights_api("BLR", dest, travel_date, cabin_class)
-        except Exception as e:
-            logger.error(f"Alternative BLR flight search failed: {e}")
-            blr_flights = []
-            
-        for f in blr_flights[:2]:
-            airline = f["airline"]
-            f_class = f["fare_class"]
-            price = f["price_inr"]
+        if flight["airline"] == "AI" and any(waiver["id"] == "CORP-AI-ANNUAL" for waiver in waivers):
+            if live_price:
+                discount_note = "Potential 12% corporate Air India discount; verify during booking."
+            else:
+                price = int(price * 0.88)
+                discount_applied = "12% Corporate AI Discount"
 
-            display_class = _display_cabin(f)
-            
-            # Policy evaluation
-            violations = []
-            if band is not None:
-                if 1 <= band <= 5:
-                    if display_class == "Business":
-                        violations.append(f"Passenger is in Band {band} and is restricted to Economy travel only")
-            if f_class not in allowed_fare_classes:
-                violations.append(f"Fare class '{display_class}' is restricted. Allowed class: Economy")
-            if price > max_fare:
-                violations.append(f"Price INR {price:,} exceeds cap.")
-            if advance_days < min_advance:
-                violations.append(f"Requires {min_advance} days advance booking.")
-                
-            compliant = len(violations) == 0
-            details = "COMPLIANT: Weather-resilient reroute from BLR." if compliant else "NON-COMPLIANT: " + "; ".join(violations)
-            
-            evaluated.append({
-                "offer_id": f.get("offer_id"),
-                "flight_number": f["flight_number"],
-                "airline": airline,
-                "airline_name": f.get("airline_name", airline),
-                "airline_codes": f.get("airline_codes", [airline]),
-                "origin": f["origin"],
-                "destination": f["destination"],
-                "departure_time": f["departure_time"],
-                "arrival_time": f["arrival_time"],
-                "duration": f["duration"],
-                "stops": f["stops"],
-                "fare_class": display_class,
-                "price_inr": price,
-                "original_price_inr": price,
-                "discount_applied": None,
-                "compliant": compliant,
-                "requires_approval": not compliant,
-                "compliance_details": details,
-                "disruption_risk": "LOW",
-                "disruption_warning": "Departure from BLR hub is unaffected by Mumbai Monsoon.",
-                "weather": weather_summary,
-                "is_alternative": True,
-                "currency": f.get("currency", "INR"),
-                "source": f.get("source", "UNKNOWN"),
-                "price_source": f.get("price_source", "Unknown source"),
-                "is_live_price": bool(f.get("is_live_price")),
-                "observed_at": f.get("observed_at"),
-                "cache_status": f.get("cache_status"),
-                "search_url": f.get("search_url"),
-                "price_note": f.get("price_note"),
-                "fallback_reason": f.get("fallback_reason"),
-                "fare_class_estimated": f.get("fare_class_estimated", False),
-                "segments": f.get("segments", []),
-            "carbon_emissions_kg": f.get("carbon_emissions_kg"),
-                "typical_carbon_emissions_kg": f.get("typical_carbon_emissions_kg"),
-                "employee_grade": band,
-                "policy_id": policy_id,
-                "policy_name": policy_context["policy_name"],
-                "allowed_cabins": policy_context["allowed_cabins"],
-                "cabin_reason": policy_context.get("cabin_reason"),
-                "policy_context": policy_context,
-            })
-            
+        audit_input = {**flight, "price_inr": price, "cabin_class": display_class.upper().replace(" ", "_")}
+        audit = evaluate_policy_checks(policy, decision, audit_input, travel_date, waivers, policy_source=policy_source)
+        if waiver_error:
+            waiver_check = next(check for check in audit["decision_trail"] if check["id"] == "waivers")
+            waiver_check.update({"status": "warning", "detail": waiver_error, "observed": "Eligibility could not be verified."})
+        context = {**decision, "policy_name": policy.get("name", policy_id), "policy_source": policy_source,
+                   "min_advance_days": policy.get("min_advance_days"), "max_fare_inr": policy.get("max_fare_inr"),
+                   "requires_approval_above_inr": policy.get("requires_approval_above_inr"),
+                   "preferred_airlines": policy.get("preferred_airlines", []),
+                   "travel_date": travel_date, "origin": flight["origin"], "destination": dest}
+        risk = "MODERATE" if is_high_weather_risk else "LOW"
+        warning = "Destination weather advisory; verify conditions before travel." if is_high_weather_risk else ""
+        if is_high_weather_risk and any(time in flight["departure_time"] for time in ("08:30", "09:00")):
+            risk = "HIGH"
+            warning = "Weather-risk advisory for this departure window; delays are not guaranteed."
+        if alternative:
+            warning = "Alternative departure from BLR; ground transfer is not included and route weather must be verified."
+        return {**flight, **audit, "fare_class": display_class, "price_inr": price,
+                "original_price_inr": original_price, "discount_applied": discount_applied,
+                "discount_note": discount_note, "surge_applied": surge_applied, "market_signal": market_signal,
+                "is_live_price": live_price, "disruption_risk": risk, "disruption_warning": warning,
+                "weather": weather_summary, "is_alternative": alternative,
+                "employee_grade": decision["employee_grade"], "policy_id": policy_id,
+                "policy_name": context["policy_name"], "allowed_cabins": decision["allowed_cabins"],
+                "cabin_reason": decision.get("cabin_reason"), "policy_context": context}
+
+    waivers, waiver_error = route_waivers(origin)
+    evaluated = [evaluate_offer(flight, waivers, waiver_error) for flight in flights]
+    if is_high_weather_risk and origin.upper() == "BOM":
+        try:
+            alternatives = search_flights_api("BLR", dest, travel_date, cabin_class)
+            alternate_waivers, alternate_error = route_waivers("BLR")
+            evaluated.extend(evaluate_offer(flight, alternate_waivers, alternate_error, True) for flight in alternatives[:2])
+        except Exception as error:
+            logger.error("Alternative flight evaluation failed: %s", error)
     return evaluated
 
 def evidence_summary(context: dict, max_documents: int = 3) -> str:

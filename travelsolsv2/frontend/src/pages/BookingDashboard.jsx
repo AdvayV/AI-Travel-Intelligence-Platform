@@ -98,7 +98,7 @@ export default function BookingDashboard({
   }, [flightOptions, proposal]);
 
   const workspaceTabs = [
-    { id: 'trace', label: 'Agent trace', count: steps.length },
+    { id: 'trace', label: 'Decision & tool trail', count: steps.length },
     { id: 'flights', label: 'Flight options', count: flightOptions?.length || 0 },
     { id: 'proposal', label: 'Proposal', count: proposal || selectedFlight ? 1 : 0 },
   ];
@@ -137,7 +137,7 @@ export default function BookingDashboard({
           {error && <div className="mx-5 mt-4 bg-danger-light text-danger border border-danger/10 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm animate-fade-in-up"><span className="flex items-center gap-2"><span>⚠</span>{error}</span><button onClick={reset} className="hover:underline font-bold text-accent">Dismiss</button></div>}
 
           <div className="flex-1 min-h-0 p-4 sm:p-5 bg-surface/40">
-            {activePanel === 'trace' && <AgentTrace steps={steps} isLoading={isLoading && flightOptions.length === 0} />}
+            {activePanel === 'trace' && <AgentTrace steps={steps} isLoading={isLoading && flightOptions.length === 0} selectedFlight={selectedFlight} />}
             {activePanel === 'flights' && (flightOptions?.length > 0 ? <div className="h-full overflow-y-auto rounded-xl border border-border bg-surface-raised p-4 shadow-sm"><FlightOptionsSelector options={flightOptions} selected={selectedFlight} onSelect={(flight) => { setSelectedFlight(flight); setActivePanel('proposal'); }} /></div> : <EmptyWorkspace icon="✈" title="Flight options will appear here" description="Run a trip request to compare policy-compliant routes, fares, and airline choices." />)}
             {activePanel === 'proposal' && ((selectedFlight || proposal) ? <div className="h-full overflow-y-auto pr-1"><BookingProposal selectedFlight={selectedFlight} proposal={proposal} onConfirm={confirmBooking} onRevise={reset} isBookingLoading={isBookingLoading} /></div> : <EmptyWorkspace icon="✓" title="Proposal ready when you are" description="Choose a flight option to review price, policy compliance, and booking approval before confirmation." />)}
           </div>

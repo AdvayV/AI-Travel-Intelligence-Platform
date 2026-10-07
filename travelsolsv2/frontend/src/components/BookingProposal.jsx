@@ -1,4 +1,5 @@
 import React from 'react';
+import PolicyDecisionTrail from './PolicyDecisionTrail';
 
 export default function BookingProposal({ selectedFlight, proposal, onConfirm, onRevise, isBookingLoading }) {
   const [isExpanded, setIsExpanded] = React.useState(true);
@@ -38,6 +39,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
             Create another booking
           </button>
         </div>
+        <div className="mt-4"><PolicyDecisionTrail flight={selectedFlight} /></div>
       </div>
     );
   }
@@ -59,35 +61,6 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
   const hasWaiverException = compliance_details && compliance_details.includes('Waiver Exception');
   const discountAmount = original_price_inr ? original_price_inr - price_inr : 0;
 
-  const getAuditList = () => {
-    const details = compliance_details || '';
-    const hasFareViolation = details.includes('Fare class') || details.includes('restricted');
-    const hasAdvanceViolation = details.includes('advance booking') || details.includes('Advance booking') || details.includes('Booked');
-    const hasPriceViolation = details.includes('exceeds') || details.includes('price cap') || details.includes('fare limit');
-    
-    return [
-      {
-        name: 'Fare Class Access',
-        passed: !hasFareViolation,
-        msg: hasFareViolation ? 'Restricted class selected for passenger band/route' : (details.includes('Waiver Exception') && details.includes('Economy') ? 'Approved via Monsoon Waiver Exception' : 'Cabin class permitted')
-      },
-      {
-        name: 'Advance Booking Window',
-        passed: !hasAdvanceViolation,
-        msg: hasAdvanceViolation ? 'Insufficient booking window' : (details.includes('Waiver Exception') && details.includes('Advance') ? 'Approved via Booking Window Exception' : 'Window compliance met')
-      },
-      {
-        name: 'Maximum Fare Cap',
-        passed: !hasPriceViolation,
-        msg: hasPriceViolation ? 'Exceeds corporate limit' : 'Within budget threshold'
-      },
-      {
-        name: 'Preferred Carrier Vendor',
-        passed: !details.includes('Non-preferred airline'),
-        msg: details.includes('Non-preferred airline') ? 'Non-preferred carrier selected' : 'Preferred carrier verified'
-      }
-    ];
-  };
 
   return (
     <div className="mt-4 border-t-2 border-accent bg-surface-raised shadow-lg rounded-b-lg p-5 animate-slide-up transition-all duration-300">
@@ -112,13 +85,13 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
                   ⚠ Non-Compliant
                 </span>
+              ) : requires_approval ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-800 border border-purple-200">
+                  Approval required
+                </span>
               ) : hasWaiverException ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
                   🎟️ Waiver Applied
-                </span>
-              ) : requires_approval ? (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                  📜 Approval Req.
                 </span>
               ) : (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -188,34 +161,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
               )}
             </div>
 
-            {/* Audit Details */}
-            {compliance_details && (
-              <div className="bg-surface/30 border border-border p-4 rounded-lg flex flex-col gap-3 shadow-inner">
-                <span className="text-[10px] font-bold text-text-tertiary uppercase tracking-wider">Compliance Audit Logs</span>
-                <div className="flex flex-col gap-2.5">
-                  {getAuditList().map((item, idx) => (
-                    <div key={idx} className="flex items-start gap-3 text-xs">
-                      {item.passed ? (
-                        <span className="text-emerald-500 font-bold text-base leading-none">✓</span>
-                      ) : (
-                        <span className="text-rose-500 font-bold text-base leading-none">✗</span>
-                      )}
-                      <div className="flex flex-col">
-                        <span className={`font-semibold ${item.passed ? 'text-text-primary' : 'text-rose-400'}`}>
-                          {item.name}
-                        </span>
-                        <span className="text-[10px] text-text-secondary mt-0.5">{item.msg}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                
-                <div className="mt-2 pt-2.5 border-t border-border/40 text-[10px] font-mono text-text-tertiary leading-relaxed">
-                  <span className="font-bold uppercase block mb-0.5 text-text-secondary">System Raw Trace:</span>
-                  {compliance_details}
-                </div>
-              </div>
-            )}
+            <PolicyDecisionTrail flight={selectedFlight} />
 
             {/* Action Buttons */}
             <div className="flex gap-3">
@@ -225,7 +171,7 @@ export default function BookingProposal({ selectedFlight, proposal, onConfirm, o
                   disabled={isBookingLoading}
                   className="flex-1 bg-accent text-white py-2 px-4 rounded-[10px] text-sm font-semibold hover:bg-accent-text transition-all duration-150 shadow-sm disabled:opacity-50"
                 >
-                  {isBookingLoading ? 'Saving demo itinerary...' : requires_approval ? 'Save Demo & Flag Approval' : 'Save Demo Itinerary'}
+                  {isBookingLoading ? 'Saving demo itinerary...' : 'Save Demo Itinerary (No Ticket)'}
                 </button>
               ) : (
                 <button

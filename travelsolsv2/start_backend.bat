@@ -12,7 +12,7 @@ if not exist "%BACKEND_PYTHON%" (
     if errorlevel 1 goto failed
 )
 if /i "%~1"=="--install" goto install
-"%BACKEND_PYTHON%" -c "import importlib.util,sys; sys.exit(any(importlib.util.find_spec(name) is None for name in ['fastapi','uvicorn','neo4j','chromadb','langchain','openai','langchain_openai','langchain_community','sentence_transformers','httpx','dotenv','truststore','pydantic','torch','apscheduler','pytrends','pandas','numpy','chronos','pypdf','fast_flights']))"
+"%BACKEND_PYTHON%" -c "import importlib.util,sys; sys.exit(any(importlib.util.find_spec(name) is None for name in ['fastapi','uvicorn','neo4j','chromadb','langchain','openai','langchain_openai','langchain_community','sentence_transformers','httpx','dotenv','truststore','pydantic','torch','apscheduler','pandas','numpy','chronos','pypdf','fast_flights']))"
 if not errorlevel 1 goto run
 :install
 echo Installing v2 backend dependencies...
