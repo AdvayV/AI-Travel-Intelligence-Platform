@@ -1,4 +1,7 @@
 @echo off
-echo Starting Backend and Frontend for TravelRoute v2...
-start "TravelRoute v2 Backend" /D "%~dp0travelsolsv2" "%~dp0travelsolsv2\start_backend.bat"
-start "TravelRoute v2 Frontend" /D "%~dp0travelsolsv2" "%~dp0travelsolsv2\start_frontend.bat"
+setlocal
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-stack.ps1" -Version 2
+if errorlevel 1 (
+    if not defined TRAVELROUTE_NO_PAUSE pause
+    exit /b 1
+)

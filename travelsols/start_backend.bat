@@ -1,42 +1,29 @@
 @echo off
-echo ============================================
-echo   TravelRoute Intelligence - Auto Launcher
-echo ============================================
-
-cd /d "%~dp0"
-
-REM Check if venv exists, create if not
-IF NOT EXIST "venv\Scripts\python.exe" (
-    echo [1/4] Creating virtual environment...
-    python -m venv venv
-    IF ERRORLEVEL 1 (
-        echo ERROR: Could not create venv. Make sure Python is installed.
-        pause
-        exit /b 1
+setlocal
+cd /d "%~dp0backend" || goto failed
+set "BACKEND_PYTHON=%~dp0venv\Scripts\python.exe"
+if not exist "%BACKEND_PYTHON%" (
+    "%SystemRoot%\System32\where.exe" python >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: Install Python and add it to PATH.
+        goto failed
     )
-) ELSE (
-    echo [1/4] Virtual environment found, skipping creation.
+    python -m venv "%~dp0venv"
+    if errorlevel 1 goto failed
 )
-
-REM Activate venv
-echo [2/4] Activating virtual environment...
-call venv\Scripts\activate.bat
-
-REM Install requirements
-echo [3/4] Installing/updating requirements...
-cd backend
-pip install -r requirements.txt --quiet
-IF ERRORLEVEL 1 (
-    echo ERROR: pip install failed. See above for details.
-    pause
-    exit /b 1
-)
-
-REM Start the server
-echo [4/4] Starting FastAPI backend on http://127.0.0.1:8000 ...
-echo.
-echo  Press CTRL+C to stop the server.
-echo ============================================
-python -m uvicorn main:app --reload --port 8000
-
-pause
+if /i "%~1"=="--install" goto install
+"%BACKEND_PYTHON%" -c "import importlib.util,sys; sys.exit(any(importlib.util.find_spec(name) is None for name in ['fastapi','uvicorn','httpx','dotenv','apscheduler','torch','chronos','numpy','pandas','pydantic','pytrends','openai','truststore']))"
+if not errorlevel 1 goto run
+:install
+echo Installing v1 backend dependencies...
+"%BACKEND_PYTHON%" -m pip install -r requirements.txt
+if errorlevel 1 goto failed
+:run
+echo Starting v1 backend: http://127.0.0.1:8000
+"%BACKEND_PYTHON%" -m uvicorn main:app --host 127.0.0.1 --port 8000
+if errorlevel 1 goto failed
+exit /b 0
+:failed
+echo ERROR: v1 backend startup failed. Review the output above.
+if not defined TRAVELROUTE_NO_PAUSE pause
+exit /b 1
