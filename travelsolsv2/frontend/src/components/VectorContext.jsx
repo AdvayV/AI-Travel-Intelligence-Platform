@@ -10,6 +10,7 @@ export default function VectorContext({ chunks }) {
       case 'FARE RULE':
         return 'bg-pink-50 text-pink-700 border-pink-100';
       case 'POLICY':
+      case 'PDF POLICY':
         return 'bg-amber-50 text-amber-700 border-amber-100';
       case 'IROPS':
       default:
@@ -46,18 +47,24 @@ export default function VectorContext({ chunks }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[350px] overflow-y-auto pr-1">
             {chunks.slice(0, 6).map((chunk, idx) => (
               <div
-                key={idx}
+                key={chunk.citation || chunk.id || idx}
                 className="bg-surface/30 border border-border rounded-md p-3 flex flex-col gap-2 shadow-sm"
               >
                 {/* Source Badge */}
                 <div className="flex items-center justify-between">
                   <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${getSourceStyle(chunk.source)}`}>
-                    {chunk.source}
+                    {chunk.citation ? `[${chunk.citation}] ` : ''}{chunk.source}
                   </span>
                   <span className="text-[9px] text-text-tertiary font-mono">
-                    ID: {chunk.id}
+                    Page: {chunk.metadata?.page ?? (Number.isInteger(chunk.metadata?.page_index) ? chunk.metadata.page_index + 1 : 'n/a')}
                   </span>
                 </div>
+                <p className="text-[10px] text-text-tertiary break-all">ID: {chunk.id}</p>
+                {chunk.retrieval && (
+                  <p className="text-[10px] text-text-tertiary">
+                    Matched by {Object.keys(chunk.retrieval.ranks).join(' + ')} · RRF {chunk.retrieval.rrf_score.toFixed(4)}
+                  </p>
+                )}
                 {/* Excerpt */}
                 <p className="text-[11px] text-text-secondary leading-relaxed">
                   {chunk.document}

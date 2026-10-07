@@ -162,7 +162,9 @@ def check_active_waivers_tool(input_str: str) -> str:
     origin = args[0].upper().strip()
     
     try:
-        waivers = get_active_waivers(origin)
+        destination = args[1].upper().strip() if len(args) > 1 else None
+        target_date = args[2].strip() if len(args) > 2 else None
+        waivers = get_active_waivers(origin, destination, target_date)
         if not waivers:
             return f"No active weather or schedule fee waivers currently apply to origin {origin}."
             
@@ -320,7 +322,7 @@ ALL_TOOLS = [
     Tool(
         name="check_active_waivers",
         func=check_active_waivers_tool,
-        description="Check if any active fee waivers or weather disruptions apply to an origin airport. Input: origin_airport_code. Example: BOM"
+        description="Check date-valid, route-scoped waivers. Input: origin, destination, YYYY-MM-DD. Example: BOM, DXB, 2026-10-21. Missing date defaults to today; an empty result means no applicable waiver."
     ),
     Tool(
         name="get_weather_risk",

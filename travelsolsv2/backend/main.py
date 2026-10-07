@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from tls_config import enable_system_trust_store
 
@@ -98,8 +98,8 @@ app.add_middleware(
 )
 
 class AgentRequest(BaseModel):
-    query: str
-    passenger_id: str = None
+    query: str = Field(min_length=1, max_length=4000)
+    passenger_id: str | None = Field(default=None, max_length=100)
 
 class FlightSearchRequest(BaseModel):
     origin: str
@@ -131,8 +131,8 @@ def api_search_flights(body: FlightSearchRequest):
         raise HTTPException(status_code=502, detail=str(error)) from error
 
 @app.post("/api/agent/run")
-async def run_agent(body: AgentRequest):
-    if not body.query:
+def run_agent(body: AgentRequest):
+    if not body.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty")
     try:
         logger.info(f"Received agent run query: '{body.query}' for passenger: '{body.passenger_id}'")
@@ -141,6 +141,15 @@ async def run_agent(body: AgentRequest):
     except Exception as e:
         logger.exception("Error executing agent query")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/retrieval")
+def api_retrieve_context(body: AgentRequest):
+    """Inspect grounded retrieval without searching flights, booking, or generating an answer."""
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="Query string cannot be empty")
+    from agent.graph_rag import retrieve_context
+    return retrieve_context(body.query, body.passenger_id)
 
 
 # ---------------------------------------------------------------------------
@@ -168,13 +177,15 @@ def api_ingest_policy(body: PolicyIngestRequest = None, background_tasks: Backgr
 
 
 @app.get("/api/policy/search")
-def api_search_policy(q: str = Query(..., description="Natural language policy query"), n: int = 4):
-    """Semantic search over ingested policy chunks."""
+def api_search_policy(q: str = Query(..., min_length=1, max_length=4000, description="Natural language policy query"),
+                      n: int = Query(4, ge=1, le=12)):
+    """Fused semantic and BM25 search over ingested policy chunks."""
     try:
         from vector.chroma_client import ChromaClient
         client = ChromaClient()
-        results = client.query("policy_documents", q, n_results=n)
-        return {"query": q, "results": results}
+        from agent.hybrid_retrieval import retrieve_documents
+        results, diagnostics = retrieve_documents(q, client, collections=["policy_documents"], limit=n)
+        return {"query": q, "results": results, "retrieval": diagnostics}
     except Exception as e:
         logger.exception("Policy search failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -641,13 +652,18 @@ def api_run_nl_query(body: NLQueryRequest):
 @app.get("/api/health")
 def api_health():
     # 1. Neo4j Status
-    neo4j_ok = (get_driver() is not None)
+    neo4j_ok = False
+    if get_driver() is not None:
+        try:
+            neo4j_ok = run_query("RETURN 1 AS ok", strict=True)[0]["ok"] == 1
+        except Exception:
+            logger.warning("Neo4j health query failed.")
     
     # 2. Chroma Status
     chroma_counts = {}
     try:
         chroma = ChromaClient()
-        for col in ["fare_rules", "corporate_policies", "irops_history"]:
+        for col in ["fare_rules", "corporate_policies", "irops_history", "policy_documents"]:
             c = chroma.get_or_create_collection(col)
             chroma_counts[col] = c.count()
     except Exception as e:
@@ -666,6 +682,9 @@ def api_health():
         "status": "ok",
         "neo4j": neo4j_ok,
         "chroma": chroma_counts,
+        "rag": {"graph_mode": "live" if neo4j_ok else "unavailable_or_mock",
+                "vector_store": ChromaClient().status(),
+                "strategy": "graph + semantic + BM25 (reciprocal rank fusion)"},
         "huggingface": hf_ok,
         "agent_mode": os.getenv("AGENT_MODE", "deterministic"),
         "chronos_model": forecast_scheduler.MODEL_ID,

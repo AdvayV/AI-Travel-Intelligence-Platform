@@ -6,7 +6,7 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 from tls_config import enable_system_trust_store
 from agent.graph_rag import retrieve_context
-from agent.policy_resolver import resolve_booking_policy
+from agent.policy_resolver import resolve_booking_policy, LONG_HAUL_DESTINATIONS
 from agent.query_parser import parse_prompt_date
 from agent.tools import ALL_TOOLS
 
@@ -23,7 +23,7 @@ try:
     from langchain_openai import ChatOpenAI
     from langchain_classic.agents import create_react_agent, AgentExecutor
     from langchain_classic.prompts import PromptTemplate
-    from agent.prompts import SYSTEM_PROMPT, CONTEXT_PROMPT_TEMPLATE
+    from agent.prompts import SYSTEM_PROMPT
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -116,7 +116,7 @@ def evaluate_flight_options(
         logger.warning(f"Could not load/recompute surge forecast for {origin}-{dest}: {e}")
         
     try:
-        waivers = get_active_waivers(origin)
+        waivers = get_active_waivers(origin, dest, travel_date)
     except Exception as e:
         logger.error(f"Waiver check failed in evaluation: {e}")
         waivers = []
@@ -217,6 +217,8 @@ def evaluate_flight_options(
         pref_airlines = policy.get("preferred_airlines", [])
         
         violations = []
+        if not policy:
+            violations.append(f"Corporate policy {policy_id} could not be verified; compliance cannot be established")
         waiver_exceptions = []
         approval_reasons = []
 
@@ -228,7 +230,7 @@ def evaluate_flight_options(
                     violations.append(f"Passenger is in Band {band} and is restricted to Economy travel only")
             # Bands 6-7: allowed Business only on transcontinental routes
             elif 6 <= band <= 7:
-                is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
+                is_long_haul = dest.upper() in LONG_HAUL_DESTINATIONS
                 if display_class == "Business" and not is_long_haul:
                     violations.append(f"Passenger is in Band {band} and is restricted to Economy on short-haul/medium-haul routes (only transcontinental routes permit Business class)")
                 if display_class == "First":
@@ -240,7 +242,7 @@ def evaluate_flight_options(
         allowed_fare_classes_normalized = list(allowed_fare_classes)
         # If Business class is allowed destination and band-wise, we ensure standard business fare classes are treated as allowed
         if display_class == "Business":
-            is_long_haul = dest.upper() in ["LHR", "JFK", "SYD", "CDG", "NRT"]
+            is_long_haul = dest.upper() in LONG_HAUL_DESTINATIONS
             if (band >= 8) or (6 <= band <= 7 and is_long_haul):
                 # Ensure business classes are allowed
                 allowed_fare_classes_normalized.extend(["J", "C", "D"])
@@ -450,9 +452,33 @@ def evaluate_flight_options(
             
     return evaluated
 
+def evidence_summary(context: dict, max_documents: int = 3) -> str:
+    parts = []
+    for item in [source for source in context.get("graph_sources", []) if source["kind"] != "document_rule"][:4]:
+        parts.append(f"[{item['citation']}] ({item['source']}) {item['text']}")
+    for chunk in context.get("semantic_chunks", [])[:max_documents]:
+        page = chunk["metadata"].get("page", chunk["metadata"].get("page_index", "n/a"))
+        parts.append(f"[{chunk['citation']}] {chunk['source']}, {chunk['id']}, page {page}:\n"
+                     f"> {chunk['document'][:600]}")
+    if not parts:
+        parts.append("No relevant evidence was found. I cannot establish an answer from the indexed sources.")
+    warnings = context.get("retrieval", {}).get("warnings", [])
+    if warnings:
+        parts.append("Retrieval notices: " + " ".join(dict.fromkeys(warnings)))
+    parts.append("Document excerpts are supporting evidence; configured grade/compliance rules take precedence. "
+                 "Historical incidents and demo fare rules are not current airline terms or active-waiver proof.")
+    return "\n\n".join(parts)
+
+
 def run_booking_agent(query: str, passenger_name: str = None) -> dict:
     # 1. Retrieve GraphRAG context
     context = retrieve_context(query, passenger_name)
+    if context.get("request_kind") == "information":
+        return {"answer": "**Retrieved evidence**\n\n" + evidence_summary(context),
+                "steps": [{"tool_name": "hybrid_retrieval", "tool_input": query,
+                           "tool_output": context["combined_context"]}],
+                "graph_context": context, "pnr": None, "compliant": None,
+                "flight_options": [], "request_context": None, "answer_mode": "grounded_extract"}
     
     # Extract flight parameters for standard structure
     entities = context["entities"]
@@ -489,12 +515,7 @@ def run_booking_agent(query: str, passenger_name: str = None) -> dict:
         )
         
         # Build the input for the agent prompt using template
-        prompt_input = CONTEXT_PROMPT_TEMPLATE.format(
-            graph_facts="\n".join([f"- {f}" for f in context["graph_facts"]]) if context["graph_facts"] else "- No specific knowledge graph facts retrieved.",
-            semantic_chunks="\n\n".join([f"[{c['source']}] (ID: {c['id']})\n{c['document']}" for c in context["semantic_chunks"]]) if context["semantic_chunks"] else "No relevant documents found.",
-            query=query,
-            entities=str(context["entities"])
-        )
+        prompt_input = context["combined_context"] + f"\n\nUSER REQUEST:\n{query}\nEntities: {entities}"
         
         logger.info("Invoking LangChain ReAct agent...")
         res = agent_executor.invoke({"input": prompt_input})
@@ -584,10 +605,11 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     # Step 1: check_active_waivers
     from agent.tools import check_active_waivers_tool, get_weather_risk_tool, search_flights_tool
     
-    waiver_out = check_active_waivers_tool(origin)
+    waiver_input = f"{origin}, {dest}, {date_str}"
+    waiver_out = check_active_waivers_tool(waiver_input)
     steps.append({
         "tool_name": "check_active_waivers",
-        "tool_input": origin,
+        "tool_input": waiver_input,
         "tool_output": waiver_out
     })
     
@@ -637,7 +659,7 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
     compliant = any(f["compliant"] for f in flight_options) if flight_options else False
     
     from graph.neo4j_client import get_active_waivers
-    active_w = get_active_waivers(origin)
+    active_w = get_active_waivers(origin, dest, date_str)
     w_details = ""
     if active_w:
         w_details = f" Note that active fee waiver(s) {', '.join([w['id'] for w in active_w])} are in effect for {origin} departures."
@@ -665,6 +687,7 @@ def run_mock_agent(query: str, context: dict, passenger_name: str = None) -> dic
         f"4. **Compliance Status**: Evaluated flight details against corporate policy {policy_id}.\n\n"
         f"Please select your preferred itinerary option below to save a non-ticketing demo reference."
     )
+    final_ans += "\n\n**Retrieved supporting evidence**\n\n" + evidence_summary(context, max_documents=2)
     
     return {
         "answer": final_ans,

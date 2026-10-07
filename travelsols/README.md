@@ -3,6 +3,41 @@
 A React + FastAPI planning dashboard for route forecasts, destination weather,
 illustrative pricing, travel-date comparison, AI explanations and Tableau CSV exports.
 
+## Architecture and features
+
+This is **part 1** of the suite: route intelligence, not a ticketing system.
+React/Vite and Recharts render the dashboard; FastAPI exposes the route, weather,
+advisor and export APIs. APScheduler refreshes the shared forecast cache.
+
+```mermaid
+flowchart TD
+    Samples[Simulated rank snapshots] --> Model[Local Chronos Bolt and damped baseline]
+    Model --> Score[Scoring and illustrative USD fares]
+    Weather[Open-Meteo and cache] --> Score
+    Trends[Optional pytrends] --> Score
+    Score --> Cache[Atomic route cache]
+    Scheduler[APScheduler or manual refresh] --> Model
+    Cache --> API[FastAPI :8000]
+    API --> UI[React / Vite / Recharts :5173]
+    Cache --> Export[Tableau-compatible CSV]
+    API --> Context[Selected route and date context]
+    Context --> Advisor[Optional hosted Qwen or local fallback]
+    Advisor --> UI
+```
+
+- **Forecast dashboard:** compares route demand-index estimates and illustrative
+  uncertainty ranges; it does not measure actual airline booking demand.
+- **Weather and dates:** 14-day conditions, temperatures, modeled fares and a
+  comfort-to-modeled-cost date recommendation.
+- **Chatbot/advisor:** answers selected-route and travel-date questions using
+  structured forecast/weather context. The default hosted model is
+  `Qwen/Qwen3-4B-Instruct-2507`; errors produce a labeled local fallback.
+- **Exports and status:** Tableau-ready CSV and integration/refresh diagnostics.
+
+v1 does **not** use Neo4j, ChromaDB, BM25 or document RAG. Part 2 adds those
+capabilities in [travelsolsv2](../travelsolsv2/README.md). See the
+[suite README](../README.md) for both architectural diagrams and the graph schema.
+
 ## What is live, and what is simulated?
 
 - Open-Meteo: live 14-day weather, cached for 30 minutes. No API key needed.
@@ -65,7 +100,12 @@ In another terminal, from travelsols/frontend:
     npm install
     npm run dev -- --host 127.0.0.1 --port 5173
 
-Open http://127.0.0.1:5173. The supplied Windows launchers also work.
+Open http://127.0.0.1:5173. On Windows, double-click `../start_v1.bat` or
+`start_all.bat` to start both servers and verify the frontend API proxy.
+Background startup logs are in `../.startup-logs/`. The backend launcher uses
+`travelsols/venv`, and its API runs at http://127.0.0.1:8000.
+Use `start_backend.bat --install` or `start_frontend.bat --install` to refresh
+dependencies; normal launches skip installation when dependencies are present.
 
 Chronos defaults to amazon/chronos-bolt-small and local cached files. Set
 CHRONOS_ALLOW_DOWNLOAD=true to allow the first model download. If the model

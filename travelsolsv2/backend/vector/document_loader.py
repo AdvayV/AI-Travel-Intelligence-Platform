@@ -8,7 +8,7 @@ def load_documents():
     
     # ------------------ 1. Seeding fare_rules collection ------------------
     fare_rules_col = chroma.get_or_create_collection("fare_rules")
-    if fare_rules_col.count() == 0:
+    if fare_rules_col.count() < 9:
         logger.info("Seeding Chroma collection 'fare_rules'...")
         
         fare_docs = [
@@ -94,48 +94,40 @@ def load_documents():
         
         chroma.add_documents("fare_rules", fare_docs, fare_ids, fare_metas)
         
-    # ------------------ 2. Seeding corporate_policies collection ------------------
-    corp_policies_col = chroma.get_or_create_collection("corporate_policies")
-    
-    import os
-    import zipfile
-    import xml.etree.ElementTree as ET
-    
-    pdf_path = "../../corporate_travel_policy.pdf"
-    if not os.path.exists(pdf_path):
-        pdf_path = "../corporate_travel_policy.pdf"
-    if not os.path.exists(pdf_path):
-        pdf_path = "corporate_travel_policy.pdf"
+    from graph.seed_data import SEED_DATA
 
-    if os.path.exists(pdf_path):
-        logger.info(f"Seeding corporate_policies from custom PDF guidelines: {pdf_path}")
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(pdf_path)
-            chunks = []
-            for idx, page in enumerate(reader.pages):
-                page_text = page.extract_text()
-                if page_text and page_text.strip():
-                    chunks.append(page_text.strip())
-            
-            logger.info(f"Extracted {len(chunks)} pages from travel policy PDF.")
-            
-            # Reset collection and seed PDF chunks
-            chroma.delete_collection("corporate_policies")
-            corp_policies_col = chroma.get_or_create_collection("corporate_policies")
-            
-            policy_ids = [f"POLICY_PDF_{i}" for i in range(len(chunks))]
-            policy_metas = [{"policy_id": "CP-ALL", "type": "pdf_policy", "page_index": i} for i in range(len(chunks))]
-            
-            chroma.add_documents("corporate_policies", chunks, policy_ids, policy_metas)
-            logger.info("Successfully loaded and indexed PDF company guidelines into ChromaDB!")
-            
-        except Exception as e:
-            logger.error(f"Failed to seed corporate policies from PDF: {e}. Falling back to default policies.")
-            _seed_default_policies(chroma, corp_policies_col)
-    else:
-        logger.info("Guidelines PDF not found. Seeding default corporate policies.")
-        _seed_default_policies(chroma, corp_policies_col)
+    configured_docs = []
+    identifiers = []
+    metadata = []
+    for policy in SEED_DATA["corporate_policies"]:
+        identifier = policy["id"]
+        configured_docs.append(
+            f"Configured corporate policy {identifier}: {policy['name']}. "
+            f"Allowed cabins: {', '.join(policy['allowed_cabins'])}. "
+            f"Allowed fare classes: {', '.join(policy['allowed_fare_classes'])}. "
+            f"Maximum fare INR {policy['max_fare_inr']}; minimum advance booking "
+            f"{policy['min_advance_days']} days; approval required above INR "
+            f"{policy['requires_approval_above_inr']}; preferred airlines "
+            f"{', '.join(policy['preferred_airlines'])}. Grade-specific cabin rules further restrict these allowances."
+        )
+        identifiers.append(f"CONFIGURED_{identifier}")
+        metadata.append({"source": "configured_corporate_policies", "policy_id": identifier, "type": "configured_policy"})
+    configured_docs.append(
+        "Configured grade rules: Grades 1-5 use CP-001, Economy only on every route. "
+        "Grades 6-7 use CP-002, Business on long-haul routes only, otherwise Economy. "
+        "Grade 8 uses CP-002, Economy or Business on all routes. Grade 9 uses CP-003, "
+        "Economy, Business or First; Business is the default unless First is requested. "
+        "An explicit Grade, Band or Level overrides the saved passenger default."
+    )
+    identifiers.append("CONFIGURED_GRADES")
+    metadata.append({"source": "configured_corporate_policies", "type": "grade_rules"})
+    result = chroma.replace_documents("corporate_policies", "configured_corporate_policies",
+                                      configured_docs, identifiers, metadata)
+    if not result["persisted"] and not chroma.use_mock:
+        raise RuntimeError("Configured corporate policies were not persisted.")
+    obsolete = [item["id"] for item in chroma.get_documents("corporate_policies")
+                if item["id"].startswith(("POLICY_PDF_", "DEFAULT_POLICY_"))]
+    chroma.delete_documents("corporate_policies", obsolete)
 
     # ------------------ 3. Seeding irops_history collection ------------------
     irops_history_col = chroma.get_or_create_collection("irops_history")
@@ -240,73 +232,3 @@ def load_documents():
         chroma.add_documents("irops_history", irops_docs, irops_ids, irops_metas)
         
     logger.info("Chroma vector databases fully seeded and ready")
-
-
-def _seed_default_policies(chroma, corp_policies_col):
-    logger.info("Seeding comprehensive default corporate travel policies into ChromaDB...")
-    default_docs = [
-        # CP-001: Class Guidelines
-        ("Corporate Travel Policy Clause CP-001 - Employee Grades, Air Cabins & Classes: "
-         "Grades 1 through 5 must book Economy Class using Fare Classes Y, M, K, or Q on every route. "
-         "Grades 6 and 7 may book Business Class using Fare Classes J, C, or D only on long-haul routes; otherwise Economy is required. "
-         "Grade 8 may book Economy or Business on all routes. Grade 9 may book Economy, Business, or First Class F, "
-         "with Business as the default unless First is explicitly requested. An explicit grade in a booking request overrides a saved traveler default."),
-        
-        # CP-002: Advance Booking
-        ("Corporate Travel Policy Clause CP-002 - Booking Window & Lead Times: "
-         "All business travel bookings must be confirmed at least 14 days prior to departure to secure optimal corporate tariffs. "
-         "Bookings completed between 7 to 13 days in advance require Department Head notification. Last-minute bookings completed "
-         "within 7 days of departure require written justification of business urgency, are subject to Department Head approval, "
-         "and trigger automated policy compliance audits."),
-        
-        # CP-003: Hotel Night Caps
-        ("Corporate Travel Policy Clause CP-003 - Lodging & Accommodation Caps: "
-         "Corporate hotel bookings must utilize preferred corporate lodging partners. Maximum allowable nightly room rates "
-         "are capped at INR 10,000 for Tier-1 cities (Mumbai, Delhi, Bengaluru, London, New York) and INR 6,000 for Tier-2 cities. "
-         "Any accommodation rate exceeding these thresholds must be routed through the Corporate Travel Desk for exception approvals."),
-        
-        # CP-004: Weather & Disruption Deviations
-        ("Corporate Travel Policy Clause CP-004 - Monsoon & Severe Weather Disruption Exceptions: "
-         "In the event of severe weather warnings (such as the annual Indian Monsoon in Mumbai/BOM or winter smog in Delhi/DEL), "
-         "travelers departing from affected airports are granted automatic exemptions from advance booking windows. "
-         "When an active airline waiver (e.g., WX-2026-INDIA) is declared, the booking lead time requirement is reduced to 2 days, "
-         "and upgrades to full economy (Class Y) are authorized to ensure business continuity without penalty fees."),
-        
-        # CP-005: Expense Limits & Approval Thresholds
-        ("Corporate Travel Policy Clause CP-005 - Expense Authorization & Limits: "
-         "Domestic travel expense claims are capped at INR 8,000 per day covering meals and local taxi fares. International daily allowance "
-         "is capped at USD 150. Any single transaction exceeding INR 100,000 (excluding standard economy flight tickets) requires "
-         "explicit Department Head pre-approval before corporate credit cards are charged."),
-        
-        # CP-006: Booking Channels
-        ("Corporate Travel Policy Clause CP-006 - Authorized Booking Channels: "
-         "All corporate travel (flights, hotels, car rentals) must be booked exclusively through the corporate GDS tool "
-         "or authorized corporate travel agents. Direct bookings on public consumer travel sites are strictly non-reimbursable "
-         "unless the booking was made under emergency circumstances during GDS system down-times."),
-        
-        # CP-007: Preferred Carriers & Discounts
-        ("Corporate Travel Policy Clause CP-007 - Preferred Airline Partner Programs: "
-         "Travelers should prioritize booking flights with preferred airline partners (including Air India / AI and IndiGo / 6E). "
-         "Air India flights booked under corporate GDS agreements qualify for a 12% corporate discount using waiver contract code CORP-AI-ANNUAL. "
-         "Bookings on non-preferred airlines are permitted only if preferred carrier flights are unavailable or cost 20% more."),
-        
-        # CP-008: Ticket Cancellations & Changes
-        ("Corporate Travel Policy Clause CP-008 - Ticket Cancellations & Itinerary Changes: "
-         "Flight changes must be completed in the GDS at least 24 hours prior to departure. Non-refundable promotional fare classes (such as Q) "
-         "must not be changed unless approved by the Business Unit Head. Involuntary changes due to airline schedule adjustments or active waivers "
-         "are exempt from GDS change fee processing charges."),
-        
-        # CP-009: Group Travel Bookings
-        ("Corporate Travel Policy Clause CP-009 - Group Travel & Event Logistics: "
-         "Bookings containing 10 or more employees traveling on the same flight or to the same destination must be managed under group contracts (Fare Class G). "
-         "To minimize corporate risk, no more than 15 employees from the same department may travel on the same aircraft sector."),
-         
-        # CP-010: Emergency Evacuation & Assistance
-        ("Corporate Travel Policy Clause CP-010 - Duty of Care & Emergency Assistance: "
-         "During active emergencies, natural disasters, or major air traffic failures, the Corporate Travel Desk is authorized "
-         "to auto-rebook travelers on weather-resilient alternative routes (such as re-routing Mumbai departures through the BLR hub). "
-         "Emergency hotel rates up to 150% of the standard cap are pre-authorized for stranded travelers.")
-    ]
-    ids = [f"DEFAULT_POLICY_{i}" for i in range(len(default_docs))]
-    metas = [{"policy_id": f"CP-{i+1:03d}", "type": "default_policy"} for i in range(len(default_docs))]
-    chroma.add_documents("corporate_policies", default_docs, ids, metas)

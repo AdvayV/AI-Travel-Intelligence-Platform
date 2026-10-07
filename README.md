@@ -1,204 +1,200 @@
-# TravelRoute Intelligence Suite — v1 & v2
+# TravelSols: TravelRoute Intelligence Suite
 
-Welcome to the **TravelRoute Intelligence Suite**, a comprehensive travel technology solution combining time-series demand forecasting and autonomous AI booking agents.
+Two related demo projects combine route planning with policy-aware flight comparison.
 
-This repository hosts two core products:
-1. **TravelRoute v1 (Demand Forecasting)**: Predictive analytics engine that forecasts 30-day popularity spikes using Chronos AI, enriches forecasts with Google Trends & Open-Meteo, and runs on port `8000` (frontend on `5173`).
-2. **TravelRoute v2 (Autonomous Booking)**: GraphRAG-powered transaction layer that audits corporate policies, checks weather risks, searches flight packages, and books itineraries via a LangChain ReAct agent on port `8001` (frontend on `5174`).
+| Project | Purpose | Frontend | Backend |
+| --- | --- | --- | --- |
+| [v1](travelsols/README.md) | Forecasts, weather/date comparison, AI advisor and CSV exports | http://127.0.0.1:5173 | http://127.0.0.1:8000 |
+| [v2](travelsolsv2/README.md) | Local forecasts, GraphRAG, hybrid retrieval and policy-aware flight comparison | http://127.0.0.1:5174 | http://127.0.0.1:8001 |
 
----
+**Demo boundaries:** historical demand inputs are simulated rank indices, not measured
+bookings. Forecast prices are illustrative USD estimates. v2 separately attempts
+Google Flights comparison fares in INR and labels estimated fallback results.
+Neither project issues tickets. Hosted LLM inference is optional and subject to
+provider access, pricing and limits; it is not guaranteed free.
 
-## Architecture Overview
+## Quick start
 
-### v1: Demand Forecasting Pipeline
-```text
-[GDS API] ----> gds_client.py ---> (mock fallback data)
-                                           |
-[Google Trends] -> trends_client.py -------+----> chronos_engine.py
-                                           |             |
-[Open-Meteo] ----> weather_client.py ------+             v
-                                                     scoring.py
-                                                         |
-                                                    FastAPI Backend (Port 8000)
-                                                         |
-                                                    React Frontend (Port 5173)
-```
+On Windows, double-click [start_v1.bat](start_v1.bat) and/or [start_v2.bat](start_v2.bat).
+The launchers start background servers, verify the frontend API proxy, and print URLs.
+Both versions can run together. Logs are saved in .startup-logs/.
 
-### v2: Autonomous Booking Agent
-```text
-                       [ User Prompt ]
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │    Entity Detection       │
-                └─────────────┬─────────────┘
-                              │
-             ┌────────────────┴────────────────┐
-             ▼                                 ▼
-   ┌───────────────────┐             ┌───────────────────┐
-   │    Neo4j Graph    │             │     ChromaDB      │
-   │  Waivers, Routes, │             │  Fare Rules, IATA │
-   │   Corp Policies   │             │   IROPS History   │
-   └─────────┬─────────┘             └─────────┬─────────┘
-             │                                 │
-             └────────────────┬────────────────┘
-                              ▼
-                ┌───────────────────────────┐
-                │   Combined Context Prompt │
-                └─────────────┬─────────────┘
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │  LangChain ReAct Agent    │ <─── [ Meta-Llama-3-8B-Instruct ]
-                └──────┬─────────────┬──────┘
-                       │             │
-        ┌──────────────┘             └──────────────┐
-        ▼                                           ▼
-┌──────────────┐                             ┌──────────────┐
-│  Agent Tools │                             │ Agent Tools  │
-│  - Weather   │                             │  - Travel API │
-│  - Policy    │                             │  - Graph DB  │
-└──────────────┘                             └──────────────┘
-```
+- Install Python and Node.js/npm compatible with the dependency manifests.
+- Copy each backend's .env.example to .env on a new machine; never commit credentials.
+- v1 uses travelsols/venv; v2 uses travelsolsv2/backend/venv.
+- Initial model/database loading can take several minutes.
+- Each project also has start_all.bat, start_backend.bat and start_frontend.bat.
+- Individual launchers run in a console; Ctrl+C stops that server.
+- Use the individual launcher's --install argument after changing dependencies.
+- Re-running the root launcher **reuses**, rather than restarts, responding servers.
+  After code/credential changes, stop that version's backend and launch it again.
 
----
+## Part 1: v1 route intelligence
 
-## Free-Tier & Local Integration Limits (v2)
+**Tools:** React 18, Vite, Recharts, FastAPI, Python/PyTorch, local Amazon Chronos Bolt,
+APScheduler, Open-Meteo, optional pytrends and an optional hosted Qwen advisor.
 
-This application runs entirely on zero-cost infrastructure and local resources:
+**Features:** ranked destination forecasts, demand/range charts, 14-day weather and
+illustrative fares, comfort-to-modeled-cost date recommendations, route-specific
+advisor chat, integration status and Tableau-compatible CSV exports.
 
-| Service / Tool | Tier Details | Capacity Limit | Cost | Account Required |
-| --- | --- | --- | --- | --- |
-| **Neo4j AuraDB Free** | Cloud graph database | 200,000 nodes & 400,000 relationships | Free | [console.neo4j.io](https://console.neo4j.io/) |
-| **ChromaDB** | Fully local vector store | Unlimited storage | Free | Local (No key) |
-| **Hugging Face Hub** | Serverless inference API | ~1,000 queries per day (Meta-Llama-3-8B-Instruct) | Free | [huggingface.co](https://huggingface.co/) |
-| **fast-flights** | Best-effort Google Flights comparison scraper | User-triggered demo searches | Free | No |
-| **Open-Meteo API** | Weather forecasting | Unlimited queries | Free | Local (No key) |
+### v1 architecture
 
-> [!NOTE]
-> **Chroma Embedding Model Notice**: On first launch, the local SentenceTransformers embedding model (`all-MiniLM-L6-v2`) will automatically download from Hugging Face. The model is extremely compact (~22MB) and runs entirely on the CPU.
+~~~mermaid
+flowchart TD
+    UI["React / Vite / Recharts :5173"] --> API["FastAPI :8000"]
+    API --> Cache["Atomic route forecast cache"]
+    Scheduler["APScheduler / manual refresh"] --> Samples["Simulated rank-index snapshots"]
+    Samples --> Forecast["Damped baseline + local Chronos Bolt"]
+    Forecast --> Score["Scoring / illustrative USD pricing"]
+    Trends["Optional Google Trends"] --> Score
+    Weather["Open-Meteo / weather cache"] --> Score
+    Score --> Cache
+    Cache --> CSV["CSV / Tableau export"]
+    API --> Context["Selected route and date context"]
+    Cache --> Context
+    Context --> Advisor["Optional hosted Qwen / local fallback answer"]
+    Advisor --> API
+~~~
 
----
+The chatbot explains structured route/weather/forecast context.
+**v1 does not use Neo4j, ChromaDB or document GraphRAG.**
+Sparse simulated history and uncalibrated ranges cannot establish real demand accuracy.
 
-## Setup & Quick Start
+## Part 2: v2 policy-aware travel demo
 
-### The Easiest Way: Auto Launchers (Windows)
-Double-click the launcher batch files located in the project folders:
-* 🚀 **[start_v2.bat](file:///C:/Advay%20study/VIT/Coforge%20Internship%20Project/start_v2.bat)** (Workspace root): Launches both backend and frontend servers for v2 simultaneously in separate Windows command prompts.
-* 🚀 **[travelsols/start_backend.bat](file:///C:/Advay%20study/VIT/Coforge%20Internship%20Project/travelsols/start_backend.bat)** & **[start_frontend.bat](file:///C:/Advay%20study/VIT/Coforge%20Internship%20Project/travelsols/start_frontend.bat)** (v1 folder): Manages and launches the servers for the v1 forecasting interface.
+**Tools:** React/Vite, Recharts/D3, FastAPI, Neo4j/Cypher, ChromaDB,
+SentenceTransformers all-MiniLM-L6-v2, local BM25, reciprocal rank fusion (RRF),
+pypdf, Chronos Bolt, Open-Meteo, fast-flights, and optional LangChain ReAct/Qwen.
 
----
+**Features:** independent local forecasting, PDF ingestion, policy graph exploration,
+natural-language retrieval, grade-based cabin decisions, flight comparison,
+weather/compliance checklists, cited evidence, user-confirmed non-ticketing demo
+references and booking history.
 
-## Step-by-Step Manual Setup
+### v2 architecture
 
-### 1. Prerequisites
-- Python 3.10 to 3.14 installed on your system.
-- Node.js (v18+) and npm installed.
+~~~mermaid
+flowchart TD
+    UI["React / Vite :5174"] --> API["FastAPI :8001"]
+    PDF["Corporate policy PDF"] --> Ingest["pypdf / bounded page-aware chunks"]
+    Ingest --> Graph["Neo4j entities and rule relationships"]
+    Ingest --> Vector["ChromaDB / local MiniLM embeddings"]
+    API --> Parse["Entity / grade / date parsing"]
+    Parse --> Traversal["Parameterized graph retrieval"]
+    Graph --> Traversal
+    Parse --> Dense["Semantic candidates"]
+    Vector --> Dense
+    Parse --> Sparse["BM25 document ranking"]
+    Vector --> Sparse
+    Dense --> Fuse["RRF / relevance gate / dedup / context budget"]
+    Sparse --> Fuse
+    Fuse --> Linked["Matching PDF graph rules"]
+    Graph --> Linked
+    Traversal --> Evidence["Citations / sources / retrieval diagnostics"]
+    Fuse --> Evidence
+    Linked --> Evidence
+    Evidence --> Answer["Grounded policy excerpts"]
+    Evidence --> Booking["Deterministic checks / optional ReAct"]
+    Booking --> Flights["Flight comparison / labeled fallback"]
+    Booking --> Weather["Open-Meteo"]
+    Booking --> Rules["Grade / fare / advance / approval checks"]
+    Answer --> UI
+    Rules --> UI
+    UI --> Confirm["Explicit demo-reference confirmation"]
+    Confirm --> Graph
+    API --> Forecast["Independent local Chronos forecast cache"]
+~~~
 
-### 2. Configure Environment Variables
-Create a `.env` file inside `travelsolsv2/backend/` and configure your API tokens:
-```env
-HUGGINGFACE_API_KEY=your_huggingface_token
-NEO4J_URI=neo4j+s://your_neo4j_db_id.databases.neo4j.io
-NEO4J_USERNAME=your_neo4j_username
-NEO4J_PASSWORD=your_neo4j_password
+### RAG and hybrid retrieval
+
+v2 combines **structured graph retrieval** with **dense semantic + sparse BM25
+document search**, not just fixed hits concatenated from each collection:
+
+1. Parse entities and enrich the query with policy, route and fare identifiers.
+2. Traverse Neo4j for structured facts; validate waiver dates, scope and conditions.
+3. Search fare rules, configured policies, historical IROPS reports and PDF chunks.
+4. Fuse ranks with sum(1 / (60 + rank)), gate weak semantic matches, deduplicate
+   text, and select at most six excerpts within a 6,500-character document budget.
+5. Fetch matching PDF graph rules using the retrieved chunk IDs.
+6. Return [G#]/[D#] citations, source/page metadata, ranking details and
+   live/mock/lexical fallback diagnostics.
+
+The default deterministic agent answers informational questions with evidence
+excerpts, without flight searches. Booking proposals also expose supporting evidence.
+Optional LLM mode receives the same cited context. Documents are evidence, not
+instructions; historical incidents and heuristically extracted PDF amounts do not
+override configured compliance rules or prove an active waiver.
+
+This improves grounding and observability, but is **not** proof of perfect retrieval
+or hallucination-free hosted generation. Detailed behavior and limitations:
+[v2 README](travelsolsv2/README.md).
+
+## Neo4j in brief
+
+Neo4j stores **nodes** for airports, passengers, policies, waivers, fare classes,
+document rules and demo bookings, and **relationships** connecting them.
+Cypher traverses these relationships for structured facts; ChromaDB separately
+handles embedding-based document retrieval. Neo4j is used only in v2.
+
+~~~mermaid
+graph LR
+    Passenger -->|HAS_POLICY| CorporatePolicy
+    Origin["Airport: origin"] -->|ROUTE| Destination["Airport: destination"]
+    Origin -->|HAS_WAIVER| Waiver
+    PolicyDocument -->|HAS_SECTION| PolicySection
+    PolicyDocument -->|CONTAINS_RULE| PolicyRule
+    PolicySection -->|HAS_RULE| PolicyRule
+    PolicyRule -->|GOVERNS_POLICY| CorporatePolicy
+    PolicyRule -->|PERMITS_FARE_CLASS| FareClass
+    PolicyRule -->|PREFERRED_AIRLINE| Airline
+    EmployeeTier -->|GOVERNED_BY| PolicyRule
+~~~
+
+Demo Booking nodes currently store itinerary properties separately. The booking
+panel's entity map illustrates inferred links; the policy graph explorer reads
+actual database relationships.
+
+Configure travelsolsv2/backend/.env:
+~~~env
+NEO4J_URI=neo4j+s://YOUR_INSTANCE_ID.databases.neo4j.io
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=YOUR_DATABASE_PASSWORD
+AGENT_MODE=deterministic
 FLIGHT_DATA_MODE=google_flights
 ALLOW_MOCK_FLIGHT_FALLBACK=true
-FLIGHT_SEARCH_CACHE_SECONDS=600
-```
+~~~
 
-### 3. Run TravelRoute v1 (Port 8000 & 5173)
-**Backend:**
-```bash
-cd travelsols/backend
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-**Frontend:**
-```bash
-cd travelsols/frontend
-npm install
-npm run dev
-# Dashboard available at http://localhost:5173
-```
+These are database credentials, **not an Aura management API key**. If unavailable,
+check the [Aura console](https://console.neo4j.io/) for status and connection URI.
+Resume a paused instance or create a replacement for a deleted one.
+Free instances can be deleted after remaining paused for more than 30 days.
+Save credentials privately, restart v2, and verify /api/health and /api/graph/stats.
+New instances receive demo seeds and PDF rules, not deleted booking history.
+[Neo4j instance lifecycle documentation](https://neo4j.com/docs/aura/managing-instances/instance-actions/).
 
-### 4. Run TravelRoute v2 (Port 8001 & 5174)
-**Backend:**
-```bash
-cd travelsolsv2/backend
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8001
-```
-**Frontend:**
-```bash
-cd travelsolsv2/frontend
-npm install
-npm run dev
-# Autonomous Agent UI available at http://localhost:5174
-```
+## Verification
 
----
+From travelsolsv2/backend:
+~~~powershell
+.\venv\Scripts\python.exe -m unittest discover -s tests -v
+.\venv\Scripts\python.exe tests\smoke_live.py
+.\venv\Scripts\python.exe tests\smoke_retrieval_live.py
+~~~
 
-## Dynamic Cabin & Weather-Resilient Booking Rules (v2)
+The retrieval smoke check requires the running v2 backend, live Neo4j and semantic
+Chroma retrieval. It does not book, scrape fares or call hosted inference.
+POST /api/retrieval inspects evidence alone.
 
-TravelRoute v2 features smart compliance rules and weather integration driven by the booking query details:
+From travelsols/backend:
+~~~powershell
+..\venv\Scripts\python.exe -m unittest discover -s tests -v
+~~~
+From either frontend: npm run build.
 
-* **Band- and Route-based Cabin Allowance**:
-  * **Bands 1-5**: Strictly restricted to Economy Class on all flight routes.
-  * **Bands 6-7**: Automatically permitted to fly Business Class on transcontinental long-haul sectors (e.g. `LHR`, `JFK`, `SYD`, `CDG`, `NRT`), but restricted to Economy Class on short/medium-haul routes (e.g. `DXB`, `SIN`, `BKK`).
-  * **Bands 8-9**: Permitted to fly Business Class on any route.
-* **Smart Policy Mapping**: If no policy ID is provided in the query, the engine dynamically maps the passenger's band level to the corresponding policy (`CP-001` for bands 1-5, `CP-002` for bands 6-8, `CP-003` for band 9).
-* **Live Travel Date Weather**: Integrates daily weather forecasts from Open-Meteo for the specific travel date offset, updating the surge multiplier for the date's forecast and displaying the weather directly alongside flight fares.
-* **LLM-Based Entity Parsing & City Resolution**: Uses the Hugging Face AI API (with local regex fallback) to semantically extract passenger names, dates, and bands, and automatically map full city names (e.g. "Bangalore" or "London") to IATA codes (e.g. `BLR` or `LHR`).
-* **Collapsible Compliance Checklist**: Displays clear checklist audit logs (with green `✓` or red `✗` indicators) inside a collapsible "Booking Proposal" panel to maximize viewport workspace.
-* **Live Demo Flight Selection**: Retrieves current Google Flights comparison fares in INR through `fast-flights`, caches repeated searches for speed, links back to Google Flights for verification, and visibly labels estimated fallback fares when live retrieval is unavailable.
+## Design references
 
-### Corporate Passenger Band Segmentation
-
-| Corporate Grade | Band Range | Default Policy | Cabin Class Rules | Seeded Mock Employees |
-| :--- | :--- | :--- | :--- | :--- |
-| **Standard Grade** | Bands 1-5 | `CP-001` (Standard Policy) | Economy only on all routes | Anita Singh (Band 3), Priya Sharma (Band 4) |
-| **Senior Management** | Bands 6-8 | `CP-002` (Senior Mgmt) | Business allowed *only* on long-haul/transcontinental routes (e.g., LHR, JFK); restricted to Economy on short-haul routes. | Aryan Mehta (Band 7), Rajesh Kumar (Band 8) |
-| **Executive Grade** | Band 9 | `CP-003` (Executive Policy) | Business/First allowed on all routes | Vikram Nair (Band 9) |
-
----
-
-## Offline & Connection Resilience (Auto-Fallback Mode)
-
-TravelRoute v2 features an advanced, bulletproof fallback system designed to ensure the application works even when third-party cloud services or API connections are down:
-
-* **Neo4j Offline Fallback**: If the Neo4j Graph DB connection is offline, blocked, or has incorrect credentials, the backend automatically transitions to a local mock database that simulates the knowledge graph facts and seeding structures.
-* **ChromaDB & Hugging Face Model Fallback**: If ChromaDB files are locked, or if the Hugging Face Hub is down (preventing the SentenceTransformers `all-MiniLM-L6-v2` embedding model from being downloaded on first run), ChromaClient falls back to a high-fidelity, local, in-memory **Keyword-Overlap Vector Store**.
-* **LLM Fallback**: If the Hugging Face Inference API is down, rate-limited, or unauthorized, the agent executor intercepts the failure and falls back to a mock deterministic execution loop (`run_mock_agent`), preserving full system functionality.
-
----
-
-## Recent Workspace Updates (June 30, 2026)
-
-The following pipeline improvements, data models, and features were implemented today:
-
-1. **API Key & GDS Rebranding:** 
-   * Transitioned all legacy Sabre sandbox code to clean GDS client configurations.
-   * Moved API key configurations to backend `.env` variables loaded strictly on startup.
-
-2. **Refined Weighting Engine:**
-   * Replaced the opportunity score weighting logic to use: `round((demand_score * 0.55 + (1 - weather_score) * 0.45) * 100, 1)`.
-   * Replaced Chronos momentum indicators with pure Google Trends signals.
-
-3. **Optimal Travel Date Search:**
-   * Built a travel-date recommender that identifies the best comfort-to-cost day of travel in the 14-day schedule.
-   * Highlighted the recommended optimal day directly in the UI card layout using golden star badges and a dynamic banner.
-
-4. **14-Day Temperature & Pricing Context Injection:**
-   * Mapped `temp_max_c` and `temp_min_c` alongside day-by-day surged prices to the Qwen3 travel advisor context.
-   * This enables the LLM to successfully answer comparative reasoning queries (e.g. *“Which day is the cheapest to travel?”* or *“What is the highest temperature in the schedule?”*).
-
-5. **Chatbot Interface & Speed Enhancements:**
-   * Removed automatic slow API calls on route changes to ensure instant page load transitions (0ms UI lag).
-   * Added a manual **🔮 Generate AI Analysis** trigger button and quick predefined question chips to the redesigned glassmorphic advisor card.
-   * Added sanitization filters to strip all double-asterisk (`**`) markdown from response fields for a natural Gemini-like conversational style.
-   * Optimized the backend Trends pipeline with a fail-fast deactivate switch on pytrends rate limits, slashing the full pipeline refresh time from **2 minutes down to 31 seconds**.
+- [Chroma collection API](https://docs.trychroma.com/reference/python/collection):
+  query distances, metadata and document upserts.
+- [Reciprocal rank fusion paper](https://research.google/pubs/reciprocal-rank-fusion-outperforms-condorcet-and-individual-rank-learning-methods/).
+- [Neo4j Python query manual](https://neo4j.com/docs/python-manual/current/query-simple/).

@@ -107,9 +107,11 @@ def _convert_value(val):
         return {k: _convert_value(v) for k, v in val.items()}
     return val
 
-def run_query(cypher: str, params: dict = None) -> list[dict]:
+def run_query(cypher: str, params: dict = None, *, strict: bool = False) -> list[dict]:
     driver = get_driver()
-    if _use_mock:
+    if driver is None:
+        if strict:
+            raise ConnectionError("Neo4j is unavailable; no live graph query was executed.")
         return _run_mock_query(cypher, params)
         
     if params is None:
@@ -127,10 +129,12 @@ def run_query(cypher: str, params: dict = None) -> list[dict]:
             return records
     except Exception as e:
         logger.error(f"Neo4j Query Error: {e}. Cypher: {cypher}")
+        if strict:
+            raise
         # Return fallback mock query results
         return _run_mock_query(cypher, params)
 
-def get_route_info(origin: str, dest: str) -> dict:
+def get_route_info(origin: str, dest: str, *, on_date: str = None, strict: bool = False) -> dict:
     origin = origin.upper().strip()
     dest = dest.upper().strip()
     
@@ -140,14 +144,14 @@ def get_route_info(origin: str, dest: str) -> dict:
     OPTIONAL MATCH (o)-[:HAS_WAIVER]->(w2:Waiver)
     RETURN o as origin_node, d as dest_node, r as route, collect(distinct w) + collect(distinct w2) as waivers
     """
-    results = run_query(query, {"origin": origin, "dest": dest})
+    results = run_query(query, {"origin": origin, "dest": dest}, strict=strict)
     if results and results[0].get("origin_node"):
         row = results[0]
         # Fetch airlines from route metadata or relationship
         airlines = row["route"].get("airlines", [])
         waivers_list = []
         for w in row.get("waivers", []):
-            if w:
+            if w and _waiver_applies(w, origin, dest, on_date, airlines):
                 waivers_list.append(w)
         return {
             "origin": origin,
@@ -158,47 +162,63 @@ def get_route_info(origin: str, dest: str) -> dict:
             "status": "OPERATIONAL"
         }
     
-    # If mock database is active or route wasn't found
-    return _get_mock_route_info(origin, dest)
+    if get_driver() is None:
+        result = _get_mock_route_info(origin, dest)
+        result["waivers"] = [waiver for waiver in result["waivers"]
+                             if _waiver_applies(waiver, origin, dest, on_date, result["airlines"])]
+        return result
+    return {}
 
-def get_active_waivers(origin: str) -> list[dict]:
+def _waiver_applies(waiver: dict, origin: str, dest: str = None, on_date: str = None,
+                    airlines: list = None) -> bool:
+    target_date = date.fromisoformat(on_date) if on_date else date.today()
+    try:
+        start = date.fromisoformat(str(waiver["valid_from"])) if waiver.get("valid_from") else None
+        end = date.fromisoformat(str(waiver["valid_until"])) if waiver.get("valid_until") else None
+    except ValueError:
+        return False
+    if (start and target_date < start) or (end and target_date > end):
+        return False
+    if waiver.get("requires_code") or waiver.get("approval_required"):
+        return False
+    if waiver.get("origin_codes") and origin not in waiver["origin_codes"]:
+        return False
+    scope = waiver.get("applies_to", [])
+    if not scope or "all routes" in scope:
+        return True
+    if dest and f"{origin}-{dest}" in scope:
+        return True
+    if not dest and any(route.startswith(f"{origin}-") for route in scope):
+        return True
+    return any(f"all {airline} routes" in scope for airline in airlines or [])
+
+
+def get_active_waivers(origin: str, dest: str = None, on_date: str = None,
+                       *, strict: bool = False) -> list[dict]:
     origin = origin.upper().strip()
-    today_str = date.today().isoformat()
+    today_str = on_date or date.today().isoformat()
     
     query = """
     MATCH (w:Waiver)
-    WHERE w.valid_until >= $today
+    WHERE (w.valid_until IS NULL OR w.valid_until >= $today)
+      AND (w.valid_from IS NULL OR w.valid_from <= $today)
     RETURN w
     """
-    results = run_query(query, {"today": today_str})
-    active_waivers = []
-    
-    for r in results:
-        w = r.get("w")
-        if w:
-            origin_codes = w.get("origin_codes", [])
-            # Also support applies_to check if it lists route like BOM-DXB
-            if not origin_codes or origin in origin_codes:
-                active_waivers.append(w)
-                
-    if _use_mock or not active_waivers:
-        # Check mock waivers
-        all_mocks = _get_mock_waivers()
-        return [w for w in all_mocks if not w.get("origin_codes") or origin in w["origin_codes"]]
-        
-    return active_waivers
+    results = run_query(query, {"today": today_str}, strict=strict)
+    waivers = _get_mock_waivers() if get_driver() is None else [row["w"] for row in results if row.get("w")]
+    return [waiver for waiver in waivers if _waiver_applies(waiver, origin, dest, today_str)]
 
-def get_corporate_policy(policy_id: str) -> dict:
+def get_corporate_policy(policy_id: str, *, strict: bool = False) -> dict:
     policy_id = policy_id.upper().strip()
     query = """
     MATCH (p:CorporatePolicy {id: $policy_id})
     RETURN p
     """
-    results = run_query(query, {"policy_id": policy_id})
+    results = run_query(query, {"policy_id": policy_id}, strict=strict)
     if results and results[0].get("p"):
         return results[0]["p"]
         
-    return _get_mock_corporate_policy(policy_id)
+    return _get_mock_corporate_policy(policy_id) if get_driver() is None else {}
 
 def write_booking(booking_data: dict) -> str:
     pnr = booking_data.get("pnr")

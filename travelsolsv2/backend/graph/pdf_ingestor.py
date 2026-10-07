@@ -53,48 +53,30 @@ def chunk_text(text: str, chunk_size: int = 600, overlap: int = 100) -> list[dic
     Respects paragraph / section boundaries where possible.
     Returns list of dicts: {id, text, page_hint, chunk_index}
     """
-    # Split into paragraphs first
-    paragraphs = re.split(r"\n{2,}", text)
-
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("Require chunk_size > overlap >= 0.")
+    markers = list(re.finditer(r"\[PAGE (\d+)\]", text))
+    pages = [(int(marker.group(1)), text[marker.end():markers[index + 1].start() if index + 1 < len(markers) else len(text)])
+             for index, marker in enumerate(markers)] if markers else [(1, text)]
     chunks = []
-    current = ""
-    chunk_idx = 0
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-
-        if len(current) + len(para) + 2 <= chunk_size:
-            current = (current + "\n\n" + para).strip()
-        else:
-            if current:
-                # Extract page hint
-                page_match = re.search(r"\[PAGE (\d+)\]", current)
-                page_hint = int(page_match.group(1)) if page_match else 0
-                chunks.append({
-                    "id": f"chunk-{chunk_idx:04d}",
-                    "text": current,
-                    "page_hint": page_hint,
-                    "chunk_index": chunk_idx
-                })
-                chunk_idx += 1
-                # overlap: keep last <overlap> chars from current
-                current = current[-overlap:] + "\n\n" + para if overlap else para
-            else:
-                current = para
-
-    # Last chunk
-    if current.strip():
-        page_match = re.search(r"\[PAGE (\d+)\]", current)
-        page_hint = int(page_match.group(1)) if page_match else 0
-        chunks.append({
-            "id": f"chunk-{chunk_idx:04d}",
-            "text": current,
-            "page_hint": page_hint,
-            "chunk_index": chunk_idx
-        })
-
+    for page, content in pages:
+        content = content.strip()
+        start = 0
+        while start < len(content):
+            end = min(start + chunk_size, len(content))
+            if end < len(content):
+                boundary = max(content.rfind("\n", start, end), content.rfind(". ", start, end),
+                               content.rfind(" ", start, end))
+                if boundary - start > chunk_size // 2:
+                    end = boundary + 1
+            excerpt = content[start:end].strip()
+            if excerpt:
+                index = len(chunks)
+                chunks.append({"id": f"chunk-{index:04d}", "text": excerpt,
+                               "page_hint": page, "chunk_index": index})
+            if end >= len(content):
+                break
+            start = max(start + 1, end - overlap)
     logger.info(f"Created {len(chunks)} text chunks")
     return chunks
 
@@ -136,12 +118,15 @@ def extract_entities(text: str) -> dict:
 
 def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
     """Write PolicyDocument, PolicySection, PolicyRule nodes + relationships."""
-    from graph.neo4j_client import run_query, get_driver
+    from graph.neo4j_client import run_query as execute_query, get_driver
+
+    def run_query(cypher, params=None):
+        return execute_query(cypher, params, strict=True)
 
     driver = get_driver()
     if driver is None:
         logger.warning("Neo4j not connected — skipping graph write for PDF.")
-        return
+        return False
 
     # ── Constraint (idempotent) ──────────────────────────────────────────────
     safe_constraints = [
@@ -149,11 +134,8 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
         "CREATE CONSTRAINT pdf_section_id IF NOT EXISTS FOR (s:PolicySection) REQUIRE s.id IS UNIQUE",
         "CREATE CONSTRAINT pdf_rule_id IF NOT EXISTS FOR (r:PolicyRule) REQUIRE r.id IS UNIQUE",
     ]
-    for c in safe_constraints:
-        try:
-            run_query(c)
-        except Exception:
-            pass
+    for constraint in safe_constraints:
+        run_query(constraint)
 
     # ── Root: PolicyDocument node ────────────────────────────────────────────
     run_query(
@@ -176,7 +158,7 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
 
         # Create PolicySection nodes for detected headings
         for section_title in ents["sections"]:
-            sec_id = f"SEC-{re.sub(r'[^A-Z0-9]', '', section_title.upper())[:30]}"
+            sec_id = f"SEC-{doc_name}-{re.sub(r'[^A-Z0-9]', '', section_title.upper())[:30]}"
             current_section_id = sec_id
             if sec_id not in seen_sections:
                 seen_sections[sec_id] = section_title
@@ -193,7 +175,7 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
 
         # Create a PolicyRule node for each chunk that has substantive content
         if len(chunk["text"]) > 80:
-            rule_id = f"RULE-{chunk['id']}"
+            rule_id = f"RULE-{doc_name}-{chunk['id']}"
             snippet = chunk["text"].replace("\n", " ").strip()
 
             # Compute max fare cap from the chunk
@@ -233,7 +215,7 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
             )
 
             # Link rule → PolicySection(s) detected in this chunk
-            chunk_section_ids = [f"SEC-{re.sub(r'[^A-Z0-9]', '', title.upper())[:30]}" for title in ents["sections"]]
+            chunk_section_ids = [f"SEC-{doc_name}-{re.sub(r'[^A-Z0-9]', '', title.upper())[:30]}" for title in ents["sections"]]
             if not chunk_section_ids and current_section_id:
                 chunk_section_ids = [current_section_id]
                 
@@ -303,7 +285,11 @@ def _write_to_neo4j(doc_name: str, chunks: list[dict], doc_entities: dict):
                     {"tid": tier_id, "name": tier.title(), "rule_id": rule_id}
                 )
 
-    logger.info(f"Graph write complete: {len(chunks)} rules, {len(seen_sections)} sections")
+    rule_ids = [f"RULE-{doc_name}-{chunk['id']}" for chunk in chunks if len(chunk["text"]) > 80]
+    run_query("MATCH (r:PolicyRule {document: $document}) WHERE NOT r.id IN $ids DETACH DELETE r",
+              {"document": doc_name, "ids": rule_ids})
+    logger.info(f"Graph write complete: {len(rule_ids)} rules, {len(seen_sections)} sections")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +316,9 @@ def _index_to_chroma(doc_name: str, chunks: list[dict], collection_name: str = "
             "max_fare_inr": str(max(ents["amounts_inr"])) if ents["amounts_inr"] else "N/A",
         })
 
-    client.add_documents(collection_name, docs, ids, metadatas)
+    result = client.replace_documents(collection_name, doc_name, docs, ids, metadatas)
     logger.info(f"Indexed {len(docs)} chunks into ChromaDB collection '{collection_name}'")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -353,22 +340,24 @@ def ingest_pdf(pdf_path: str, collection_name: str = "policy_documents") -> dict
 
     # Step 2: Chunk
     chunks = chunk_text(text, chunk_size=600, overlap=100)
+    if not chunks:
+        raise ValueError("PDF contains no extractable text; OCR is required for scanned documents.")
 
     # Step 3: Overall doc-level entity summary (for logging)
     doc_entities = extract_entities(text[:5000])
 
     # Step 4: Index into ChromaDB
     try:
-        _index_to_chroma(doc_name, chunks, collection_name)
+        index_result = _index_to_chroma(doc_name, chunks, collection_name)
         chroma_ok = True
     except Exception as e:
         logger.error(f"ChromaDB indexing failed: {e}")
         chroma_ok = False
+        index_result = {"persisted": False}
 
     # Step 5: Write to Neo4j
     try:
-        _write_to_neo4j(doc_name, chunks, doc_entities)
-        neo4j_ok = True
+        neo4j_ok = _write_to_neo4j(doc_name, chunks, doc_entities)
     except Exception as e:
         logger.error(f"Neo4j write failed: {e}")
         neo4j_ok = False
@@ -378,6 +367,7 @@ def ingest_pdf(pdf_path: str, collection_name: str = "policy_documents") -> dict
         "pages": text.count("[PAGE "),
         "chunks": len(chunks),
         "chroma_indexed": chroma_ok,
+        "chroma_persisted": index_result["persisted"],
         "neo4j_written": neo4j_ok,
         "sample_entities": doc_entities
     }

@@ -11,7 +11,138 @@ The forecasting pipeline is independent of Neo4j, Chroma, flight-search services
 Google Trends and hosted LLM inference. The existing weather feed is its only
 network data source. Other booking/graph integrations remain separate features.
 
+## Architecture: part 2 of the suite
+
+React/Vite, Recharts and D3 provide the three workspaces. FastAPI separates the
+forecast endpoints from policy retrieval and itinerary comparison. Neo4j stores
+structured graph facts; local ChromaDB stores document text and MiniLM embeddings.
+The default booking agent is deterministic, with optional LangChain ReAct and
+`Qwen/Qwen2.5-7B-Instruct` hosted inference when `AGENT_MODE=llm` is configured.
+
+```mermaid
+flowchart TD
+    PDF[Corporate policy PDF] --> Ingest[Page-aware bounded chunks / pypdf]
+    Ingest --> Graph[Neo4j graph rules and relationships]
+    Ingest --> Vector[ChromaDB / local MiniLM embeddings]
+    UI[React / Vite :5174] --> API[FastAPI :8001]
+    API --> Parse[Entity / grade / date parser]
+    Parse --> GraphRead[Parameterized Cypher traversal]
+    Graph --> GraphRead
+    Parse --> Search[Semantic search plus BM25]
+    Vector --> Search
+    Search --> Fusion[RRF / dedup / relevance gate / budget]
+    Fusion --> Linked[Matched PDF rule lookup]
+    Graph --> Linked
+    Linked --> Evidence[Cited evidence and diagnostics]
+    Fusion --> Evidence
+    GraphRead --> Evidence
+    Evidence --> Answers[Grounded policy excerpts or booking proposal]
+    Answers --> Tools[Flight comparison / weather / deterministic compliance]
+    Answers --> UI
+    Tools --> UI
+    UI --> Confirm[User-confirmed demo reference]
+    Confirm --> Graph
+    API --> Forecast[Independent local Chronos forecasting]
+```
+
+### RAG and hybrid retrieval
+
+`agent/graph_rag.py` coordinates graph traversal and document retrieval.
+`agent/hybrid_retrieval.py` implements a local BM25 retriever and reciprocal
+rank fusion without a paid reranking service or an extra search dependency.
+
+1. Resolve airports, passenger, grade, policy and fare codes. Grade-based policy
+   selection agrees with the booking engine; conflicting saved passenger mappings
+   produce a visible notice instead of silently overriding the resolved grade.
+2. Fetch structured facts using parameterized Cypher. In live mode, failures are
+   disclosed and are not silently replaced with mock facts. Missing live routes
+   are not manufactured. Waivers must satisfy date, route/origin and authorization
+   conditions; historical IROPS documents are not active-waiver proof.
+3. Search all four collections: `fare_rules`, `corporate_policies`,
+   `irops_history` and `policy_documents`. Configured policy documents mirror the
+   demo graph's policy definitions; the PDF lives in its own canonical collection.
+4. Rank semantic candidates and BM25 matches globally. RRF adds
+   `1 / (60 + rank)` for each retrieval method. Semantic matches below a heuristic
+   similarity of 0.25 are excluded; distances are interpreted using the collection
+   metric. Existing normalized MiniLM L2 collections remain compatible; new
+   collections use cosine distance. This gate is not a calibrated confidence score.
+   Read the metric from collection configuration as well as legacy metadata;
+   missing metadata does not imply L2. Exact fare/policy metadata excludes
+   conflicting configured records when those identifiers are specified.
+5. Deduplicate identical normalized text across collections. Keep at most six
+   chunks, each at most 1,800 characters, within a 6,500-character document budget.
+   Overlapping but nonidentical passages may still remain.
+6. Use selected PDF chunk identifiers to retrieve their corresponding graph
+   `PolicyRule` nodes, connecting semantic retrieval back to the graph.
+7. Return `[G#]` graph and `[D#]` document citations, source IDs/pages, BM25 scores,
+   semantic distances, RRF rank contributions, source modes and warnings.
+
+The deterministic chatbot returns cited evidence excerpts for policy-only questions
+without searching flights. Booking answers expose retrieved supporting excerpts
+alongside their rule-based decisions. Optional hosted generation consumes the same
+cited context and is instructed not to follow directions embedded in documents.
+Retrieved PDF amounts are heuristic annotations, **not executable policy rules**.
+Stored grade/cabin/fare/advance/approval checks remain the compliance authority.
+
+### Ingestion and fallback behavior
+
+- The root `corporate_travel_policy.pdf` is indexed at startup. Chunks are bounded,
+  overlap within a page, preserve page numbers, and have document-scoped graph IDs.
+- Chroma upserts update existing IDs. Source-scoped replacement removes stale PDF
+  chunks; graph re-ingestion removes obsolete rules for that document, not bookings.
+- Ingestion reports `chroma_indexed`, `chroma_persisted` and `neo4j_written`
+  separately. A skipped/offline graph write reports false, not successful persistence.
+- Semantic query failures preserve a memory mirror for local lexical retrieval;
+  one failed collection does not switch every collection to an empty mock store.
+- No matching evidence can yield an empty result; the agent states the limitation.
+  In-memory fallback is not durable storage and is not dense semantic retrieval.
+- The booking entity map illustrates inferred links; inspect cited graph facts or
+  the policy graph explorer for actual retrieved database evidence.
+
+### Retrieval API
+
+- `POST /api/retrieval` with `{"query":"What are the rules for grade 9?"}`:
+  evidence and diagnostics only, without fare searches, bookings or answer generation.
+- `POST /api/agent/run`: grounded informational answer or booking comparison proposal.
+- `GET /api/policy/search?q=approval&n=4`: semantic/BM25 fusion over PDF chunks only.
+- `GET /api/health`: verified graph query, all four collection counts, vector-store
+  mode/model and the configured retrieval strategy.
+- `GET /api/graph/stats`: live/mock graph mode and seed counts.
+
+Queries are bounded to 4,000 characters; policy-search result limits are 1-12.
+The document budget still applies when requesting more policy-search results.
+
+### Neo4j overview and setup
+
+Neo4j stores airports, route relationships, passengers, corporate policies,
+fare classes, waivers, document sections/rules and saved demo references. Cypher
+retrieves connected facts; ChromaDB, not Neo4j, performs embedding search here.
+The [suite README](../README.md#neo4j-in-brief) includes the relationship diagram.
+
+Configure `backend/.env` privately:
+
+```env
+NEO4J_URI=neo4j+s://YOUR_INSTANCE_ID.databases.neo4j.io
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=YOUR_DATABASE_PASSWORD
+```
+
+These are Bolt database credentials, not an Aura API key. Check the
+[Aura console](https://console.neo4j.io/) if the hostname fails DNS or the instance
+is paused. Resume an existing instance or create a replacement if it was deleted.
+Aura Free instances can be deleted after remaining paused for over 30 days.
+[Official instance lifecycle documentation](https://neo4j.com/docs/aura/managing-instances/instance-actions/).
+Restart the backend after replacement so it seeds the fresh graph and ingests the
+PDF. Re-running the root launcher alone reuses a responding backend.
+Seeding does not recover bookings from a deleted database.
+
 ## Run
+
+On Windows, double-click `../start_v2.bat` or `start_all.bat` to start both
+servers in the background and verify readiness. Logs are saved in
+`../.startup-logs/`. Both versions can run together on their separate ports.
+Use `start_backend.bat --install` or `start_frontend.bat --install` to refresh
+dependencies; normal launches skip installation when dependencies are present.
 
 Backend (PowerShell, from travelsolsv2/backend):
 
@@ -137,11 +268,10 @@ FLIGHT_DATA_MODE controls the separate flight comparison adapter;
 ALLOW_MOCK_FLIGHT_FALLBACK controls its demo fallback. Comparison results are
 not ticket issuance, and saved demo references are not airline reservations.
 
-Neo4j credentials are only needed for the graph feature. The configured Aura
-hostname currently fails DNS resolution on this machine; the app therefore
-uses its mock graph fallback. Forecasting remains fully usable. Mock graph
-writes are not proof of persistence to the remote database. Check /api/health
-before relying on stored bookings or graph policy updates.
+Neo4j credentials enable live graph retrieval and persistent demo history.
+Unavailable credentials/instances produce explicitly labeled fallback graph
+context; forecasting remains usable. Check /api/health and /api/graph/stats
+before relying on graph updates. Mock writes are not remote persistence.
 
 Chroma uses local all-MiniLM-L6-v2 embeddings when available, or keyword-overlap
 fallback. Initial embedding setup may contact the Hub independently of the
@@ -157,6 +287,28 @@ Offline regression suite (from travelsolsv2/backend):
 Tests deny external HTTP requests for forecasting/model/cache scenarios. They
 cover sparse history, real time gaps, quantile alignment, local-only loading,
 failure retention, weather expiry and offline mode, API validation and exports.
+`test_retrieval.py` adds deterministic retrieval regressions for exact identifiers,
+semantic-only matches, RRF, deduplication, context budgets, upserts, page-aware
+chunks, waiver validity, strict graph failures and evidence-backed answers.
+
+Live RAG smoke check (read-only; requires the running backend, live Neo4j and
+semantic Chroma embeddings):
+
+    .\venv\Scripts\python.exe tests\smoke_retrieval_live.py
+
+It checks both retrieval methods, citations, linked PDF graph rules, grade mapping,
+expired-waiver exclusion, a grounded policy answer, API limits and the frontend
+proxy. It does not submit bookings, scrape fares or invoke hosted inference.
+
+### Remaining production work
+
+These regressions and smoke checks prove exercised behaviors, not universal
+retrieval accuracy. Build a human-labeled query/evidence set and measure recall@k,
+MRR, citation support and abstention quality before tuning fusion or adding a
+local cross-encoder. Production also needs document versioning, calibrated
+relevance thresholds, OCR for scans, authoritative fare/policy feeds, access
+control, durable fallback storage and transactional ingestion. Graph and vector
+writes are currently separate operations, not an atomic cross-store transaction.
 
 Real model audit with HTTP disabled (requires cached model weights):
 

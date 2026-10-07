@@ -10,7 +10,7 @@ export default function GraphContext({ context }) {
   const { entities = {}, graph_facts = [] } = context;
   
   // Calculate total entities
-  const entityCount = Object.values(entities).reduce((acc, curr) => acc + (curr ? curr.length : 0), 0);
+  const entityCount = Object.values(entities).reduce((count, value) => count + (Array.isArray(value) ? value.length : 0), 0);
 
   const highlightCodes = (text) => {
     const regex = /\b(BOM|DEL|BLR|MAA|HYD|DXB|SIN|LHR|JFK|CDG|NRT|BKK|KUL|DOH|SYD|AI|EK|QR|SQ|BA|6E|CP-\d{3}|WX-\d{4}-[A-Z]+|OPS-[A-Z]+-\d{4}-\d+|CORP-[A-Z]+-[A-Z]+|EMRG-\d{4})\b/g;
@@ -56,6 +56,17 @@ export default function GraphContext({ context }) {
       </div>
 
       {/* Collapsible Content */}
+      {context.retrieval && (
+        <div className="px-4 py-2 text-[11px] text-text-secondary border-b border-border" aria-live="polite">
+          <p>Graph: <strong>{context.retrieval.graph_mode}</strong> · Documents: <strong>{context.retrieval.document_mode}</strong></p>
+          <p>Semantic + BM25 rank fusion · entity map links are illustrative; cited facts are the retrieved evidence.</p>
+          {context.retrieval.warnings?.length > 0 && (
+            <ul className="mt-2 text-amber-700 list-disc pl-4">
+              {context.retrieval.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
       {isOpen && (
         <div className="p-4 flex flex-col gap-4">
           {/* Tabs Navigation */}
@@ -129,6 +140,11 @@ export default function GraphContext({ context }) {
                 <div className="flex flex-col gap-2 max-h-56 overflow-y-auto">
                   {graph_facts.map((fact, idx) => (
                     <div key={idx} className="text-xs text-text-primary p-2.5 bg-surface/50 border border-border rounded-md leading-relaxed">
+                      {context.graph_sources?.[idx] && (
+                        <span className="block mb-1 text-[10px] font-mono text-text-secondary">
+                          [{context.graph_sources[idx].citation}] {context.graph_sources[idx].source}
+                        </span>
+                      )}
                       {highlightCodes(fact)}
                     </div>
                   ))}
