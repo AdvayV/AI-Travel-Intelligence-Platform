@@ -457,13 +457,16 @@ def api_run_cypher(body: CypherQueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 class NLQueryRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=4000)
     api_key: str = None
 
 @app.post("/api/graph/query/nl")
 def api_run_nl_query(body: NLQueryRequest):
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be blank")
     try:
         from graph.neo4j_client import run_query
+        from graph.answer_formatter import paragraph_answer
         import json
         import re
         import httpx
@@ -583,8 +586,9 @@ def api_run_nl_query(body: NLQueryRequest):
             f"Database Results:\n{json.dumps(results[:15], indent=2)}\n\n"
             f"Instructions:\n"
             f"1. Give a direct answer to the user's question.\n"
-            f"2. Format your answer as a short paragraph followed by a clear bulleted list if there are multiple items.\n"
+            f"2. Format your answer as readable prose paragraphs, without headings, lists or code blocks.\n"
             f"3. Do NOT output raw JSON or raw Cypher queries.\n"
+            f"4. Use only the retrieved facts. Do not invent approvals, prices or rules.\n"
             f"Answer:"
         )
         
@@ -636,8 +640,7 @@ def api_run_nl_query(body: NLQueryRequest):
                     except Exception as e:
                         logger.error(f"Fallback LLM synthesis failed: {e}")
                 
-        if not answer:
-            answer = f"Found {len(results)} records matching your query."
+        answer = paragraph_answer(answer, body.question, results)
             
         return {
             "status": "success",

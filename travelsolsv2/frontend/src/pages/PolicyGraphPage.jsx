@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import GraphQueryResponse from '../components/GraphQueryResponse';
 
 const NODE_CONFIG = {
   document:  { color: '#1E1B4B', label: 'PolicyDocument', r: 28, text: '#ffffff' },
@@ -192,8 +193,8 @@ export default function PolicyGraphPage() {
         setQueryResults(data.results);
         setShowConsole(true);
       } else {
-        const errText = await res.text();
-        setQueryAnswer(`Error translating prompt: ${errText}`);
+        const error = await res.json().catch(() => null);
+        setQueryAnswer(typeof error?.detail === 'string' ? error.detail : 'The graph query could not be completed. Please try again.');
         setShowConsole(true);
       }
     } catch (err) {
@@ -476,7 +477,7 @@ export default function PolicyGraphPage() {
                 disabled={queryLoading || !nlPrompt.trim()}
                 className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-1.5 rounded transition-all shadow"
               >
-                {queryLoading ? 'Translating...' : 'Generate Cypher'}
+                {queryLoading ? 'Finding answer...' : 'Ask graph'}
               </button>
             </div>
           </form>
@@ -504,40 +505,17 @@ export default function PolicyGraphPage() {
           </form>
         </div>
 
-        {/* Collapsible Console Output for Query Answers / JSON Results */}
         {showConsole && (
-          <div className="bg-[#0F172A] border border-[#1E293B] rounded-lg p-3 flex flex-col gap-2.5 max-h-[160px] overflow-y-auto font-mono text-[11px] text-slate-300 relative animate-fade-in-up">
+          <section className="relative max-h-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 pr-12 shadow-sm" aria-label="Graph query response">
             <button
               onClick={() => setShowConsole(false)}
-              className="absolute right-2 top-2 text-slate-500 hover:text-slate-300 text-xs font-bold font-sans"
+              className="absolute right-3 top-3 text-xs font-semibold text-slate-500 hover:text-slate-800"
+              aria-label="Close graph answer"
             >
               Close ×
             </button>
-            
-            {/* Model Generated Summary Answer */}
-            {queryAnswer && (
-              <div className="border-b border-[#1E293B] pb-3 mb-2">
-                <span className="text-[10px] uppercase font-bold text-[#38BDF8] tracking-wider flex items-center gap-2 mb-2">
-                  <span className="text-base">🤖</span> AI Summary Analysis
-                </span>
-                <div className="text-white leading-relaxed font-sans text-sm bg-slate-800/50 p-3 rounded border border-slate-700/50 shadow-inner">
-                  {queryAnswer.split('\n').map((line, idx) => (
-                    <div key={idx} className={line.trim().startsWith('-') || line.trim().startsWith('*') ? 'ml-4 mb-1 text-slate-300' : 'mb-2 text-slate-200'}>
-                      {line.replace(/\*\*/g, '').replace(/\*/g, '')}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Cypher Result JSON Rows */}
-            {queryResults && (
-              <div>
-                <span className="text-[9px] uppercase font-bold text-[#E2E8F0]/60 tracking-wider block mb-1">📊 Raw Database Results ({queryResults.length} rows)</span>
-                <pre className="text-slate-400 text-[10px] leading-tight select-all break-all overflow-x-auto whitespace-pre-wrap">{JSON.stringify(queryResults, null, 2)}</pre>
-              </div>
-            )}
-          </div>
+            <GraphQueryResponse answer={queryAnswer} results={queryResults} />
+          </section>
         )}
       </div>
 

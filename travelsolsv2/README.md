@@ -86,6 +86,16 @@ Stored grade/cabin/fare/advance/approval checks remain the compliance authority.
 
 ### Visible booking decision trail
 
+The policy graph's natural-language query panel displays prose paragraphs by
+default. If answer generation is unavailable or returns JSON/code, a local
+formatter describes the retrieved record properties and PDF excerpts, preserving
+section/page information without inventing missing rules. Raw database rows remain
+available in collapsed **Show technical query data** details for inspection.
+The browser also parses nested/flat result JSON into policy sentences when an older
+backend returns only "Found N records", an empty answer or JSON. This includes actual
+cabins, fare codes, fare caps, lead times, preferred carriers, approval thresholds and
+PDF snippets/pages; it does not merely hide the result rows or display their count.
+
 - Select an option and open **Proposal** or **Decision & tool trail** to see the
   backend's ordered audit: grade mapping, policy source, requested/searched/returned
   cabin, eligible waivers, booking code, fare cap, date, lead time, preferred airline,
